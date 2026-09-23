@@ -10,9 +10,9 @@
 
 </div>
 
-[![KK Head Follow 实际网页演示：人物与犬类角色随鼠标方向改变姿态，点击观看视频](assets/readme/demo.jpg)](https://github.com/kkfor30/kk-head-follow/blob/main/assets/readme/demo.mp4)
+<video src="https://github.com/kkfor30/kk-head-follow/raw/refs/heads/main/assets/readme/demo.mp4" poster="https://raw.githubusercontent.com/kkfor30/kk-head-follow/main/assets/readme/demo.jpg" controls muted playsinline width="100%"></video>
 
-<p align="center"><a href="https://github.com/kkfor30/kk-head-follow/blob/main/assets/readme/demo.mp4">▶ 观看 6 秒效果视频</a></p>
+<p align="center">6 秒实际网页演示 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
 
 一个面向 AI 编程 Agent 的 Skill：从连续头部视频中识别方向、编译图集，并接入网页的鼠标跟随效果。适合个人主页、角色首屏和交互展示。
 
@@ -89,4 +89,4 @@ node --test tests/*.test.mjs
 
 ## 许可
 
-代码与文档的许可证见 [LICENSE](LICENSE)。演示媒体的使用说明见 [媒体说明](assets/readme/NOTICE.md)。
+代码与文档采用 [MIT License](LICENSE)。演示媒体的使用说明见 [媒体说明](assets/readme/NOTICE.md)。
