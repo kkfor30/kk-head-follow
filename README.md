@@ -10,6 +10,10 @@
 
 </div>
 
+![鼠标指向左上或右上时，黄衣人物与小狗转头看向对应方向](assets/readme/head-follow-explainer-v1.png)
+
+<p align="center">交互原理示意 · 实际效果见下方录屏</p>
+
 [![网页角色随鼠标方向转头的实际动态演示](assets/readme/demo.gif)](assets/readme/demo.mp4)
 
 <p align="center">6 秒实际网页演示 · 首页动图自动播放 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
