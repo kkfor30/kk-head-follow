@@ -10,9 +10,9 @@
 
 </div>
 
-<video src="https://github.com/kkfor30/kk-head-follow/raw/refs/heads/main/assets/readme/demo.mp4" poster="https://raw.githubusercontent.com/kkfor30/kk-head-follow/main/assets/readme/demo.jpg" controls muted playsinline width="100%"></video>
+[![网页角色随鼠标方向转头的实际动态演示](assets/readme/demo.gif)](assets/readme/demo.mp4)
 
-<p align="center">6 秒实际网页演示 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
+<p align="center">6 秒实际网页演示 · 首页动图自动播放 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
 
 一个面向 AI 编程 Agent 的 Skill：从连续头部视频中识别方向、编译图集，并接入网页的鼠标跟随效果。适合个人主页、角色首屏和交互展示。
 
