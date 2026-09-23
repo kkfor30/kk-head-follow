@@ -6,7 +6,7 @@
 
 连续视频 → 方向图集 → 网页交互
 
-[实验版 0.1.0](VERSION) · [开始使用](#开始使用) · [制作流程](SKILL.md) · [效果视频](assets/readme/demo.mp4)
+[开始使用](#开始使用) · [制作流程](SKILL.md) · [效果视频](assets/readme/demo.mp4)
 
 </div>
 
@@ -14,11 +14,11 @@
 
 <p align="center">交互原理示意 · 实际效果见下方录屏</p>
 
-[![网页角色随鼠标方向转头的实际动态演示](assets/readme/demo.gif)](assets/readme/demo.mp4)
+https://github.com/user-attachments/assets/83d29722-03d3-45ca-bc54-2e1e39bb6875
 
-<p align="center">6 秒实际网页演示 · 首页动图自动播放 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
+<p align="center">6 秒实际网页演示 · <a href="assets/readme/demo.mp4">查看视频文件</a></p>
 
-一个面向 AI 编程 Agent 的 Skill：从连续头部视频中识别方向、编译图集，并接入网页的鼠标跟随效果。适合个人主页、角色首屏和交互展示。
+一个面向 AI 编程 `Agent` 的 Skill：从连续头部视频中识别方向、编译图集，并接入网页的鼠标跟随效果。适合个人主页、角色首屏和交互展示。
 
 上方为维护者提供的实际效果录屏。它展示特定页面的体验，不是通用模板，也不代表任意输入素材都能一次成功。仓库不附带该页面的角色源图或生成原片。
 
@@ -35,7 +35,7 @@
 
 ## 开始使用
 
-将仓库放入支持 `SKILL.md` 的 Agent 技能目录，目录名保留为 `kk-head-follow`。例如 Codex 的用户技能目录为 `~/.codex/skills/`；也可以先克隆，再让 Agent 读取本仓库的 `SKILL.md`：
+将仓库放入支持 `SKILL.md` 的 `Agent` 技能目录，目录名保留为 `kk-head-follow`。例如 Codex 的用户技能目录为 `~/.codex/skills/`；也可以先克隆，再让 `Agent` 读取本仓库的 `SKILL.md`：
 
 ```bash
 git clone https://github.com/kkfor30/kk-head-follow.git
@@ -45,7 +45,7 @@ python -m pip install -r requirements.txt
 
 运行环境：Python 3.10+、FFmpeg / FFprobe。配准与光流还需 `opencv-python-headless`；运行网页使用支持 ES modules 的现代浏览器，并通过 HTTP 提供页面。
 
-对 Agent 说：
+对 `Agent` 说：
 
 > 使用 $kk-head-follow，把我提供的连续头部视频接入现有网页，实现鼠标方向跟随。先检查视频是否覆盖完整方向，再交付可体验的候选并说明未通过的检查。
 
@@ -72,7 +72,7 @@ Key 保存在用户配置目录，不写入仓库。新生成需要明确预算�
 
 ## 当前边界
 
-- **实验版**：需要逐帧检查与实际页面验收，不承诺一次生成成功。
+- **素材验收**：需要逐帧检查与实际页面验收，不承诺一次生成成功。
 - **不包含自然回正系统**：鼠标进入中性区或移出时显示静态底图；自然进入、退出需要额外过渡素材。
 - **方向缺失不能靠标签补齐**：完整方向环必须有对应动作证据。
 - **复杂背景需要单独处理**：羽化不能消除内部色差、旧头轮廓或遮挡问题。
