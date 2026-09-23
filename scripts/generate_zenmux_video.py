@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Generate a head-follow source video through ZenMux's native video API."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import mimetypes
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from PIL import Image
+
+from zenmux_config import configured_api_key
+from submission_budget import reserve, write_atomic, check_limits, check_stage
+from generation_plan import validate_plan
+
+DEFAULT_BASE_URL = "https://zenmux.ai/api/v1"
+DEFAULT_MODEL = "minimax/minimax-h3-max"
+DEFAULT_RESOLUTION = "768p"
+MAX_PROMPT_CHARACTERS = 7000
+TERMINAL_STATES = {"succeeded", "failed", "cancelled", "canceled"}
+COMMON_RATIOS = {
+    "21:9": 21 / 9,
+    "16:9": 16 / 9,
+    "4:3": 4 / 3,
+    "1:1": 1.0,
+    "3:4": 3 / 4,
+    "9:16": 9 / 16,
+}
+
+
+def configure_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"[kk-head-follow] {message}")
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(f"spec not found: {path}")
+    except json.JSONDecodeError as exc:
+        fail(f"invalid JSON in {path}: {exc}")
+    if not isinstance(value, dict):
+        fail("spec root must be an object")
+    return value
+
+
+def local_media_uri(value: str, base_dir: Path) -> str:
+    if value.startswith(("http://", "https://", "data:")):
+        return value
+    path = Path(value)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    if not path.is_file():
+        fail(f"media file not found: {path}")
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def infer_ratio(value: str | None, base_dir: Path) -> str:
+    if not value:
+        return "1:1"
+    if value.startswith(("http://", "https://", "data:")):
+        return "1:1"
+    path = Path(value)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    if not path.is_file():
+        fail(f"reference image not found: {path}")
+    with Image.open(path) as image:
+        actual = image.width / image.height
+    return min(COMMON_RATIOS, key=lambda name: abs(COMMON_RATIOS[name] - actual))
+
+
+def build_content(spec: dict[str, Any], base_dir: Path) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = []
+    prompt = spec.get("prompt")
+    if spec.get("prompt_file"):
+        prompt_path = Path(str(spec["prompt_file"]))
+        if not prompt_path.is_absolute():
+            prompt_path = (base_dir / prompt_path).resolve()
+        try:
+            prompt = prompt_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            fail(f"prompt file not found: {prompt_path}")
+    if not isinstance(prompt, str) or not prompt.strip():
+        fail("provide a non-empty spec.prompt or spec.prompt_file")
+    prompt = prompt.strip()
+    prompt_length = len(prompt)
+    if prompt_length > MAX_PROMPT_CHARACTERS:
+        fail(
+            f"视频提示词为 {prompt_length} characters，超过 ZenMux 规范上限 "
+            f"{MAX_PROMPT_CHARACTERS}；请精简后再提交"
+        )
+    content.append({"type": "text", "text": prompt})
+
+    media_fields = (
+        ("first_frame", "image_url", "first_frame"),
+        ("last_frame", "image_url", "last_frame"),
+        ("reference_image", "image_url", "reference_image"),
+        ("reference_video", "video_url", "reference_video"),
+        ("reference_audio", "audio_url", "reference_audio"),
+    )
+    first_frame = spec.get("first_frame")
+    last_frame = spec.get("last_frame")
+    if spec.get("loop_frame"):
+        if not first_frame:
+            fail("loop_frame requires first_frame")
+        if last_frame:
+            fail("loop_frame and last_frame cannot be used together")
+        last_frame = first_frame
+    if last_frame and not first_frame:
+        fail("last_frame requires first_frame")
+    reference_mode = bool(spec.get("reference_image") or spec.get("reference_images"))
+    frame_mode = bool(first_frame or last_frame)
+    if reference_mode and frame_mode:
+        fail("reference_image(s) is mutually exclusive with first_frame/last_frame (MiniMax error 2013)")
+
+    for field, content_type, role in media_fields:
+        value = spec.get(field)
+        if field == "last_frame":
+            value = last_frame
+        if value:
+            content.append(
+                {
+                    "type": content_type,
+                    "role": role,
+                    content_type: {"url": local_media_uri(str(value), base_dir)},
+                }
+            )
+    references = spec.get("reference_images", [])
+    if references:
+        if not isinstance(references, list):
+            fail("reference_images must be an array")
+        for reference in references:
+            content.append({
+                "type": "image_url",
+                "role": "reference_image",
+                "image_url": {"url": local_media_uri(str(reference), base_dir)},
+            })
+    return content
+
+
+def request_json(
+    url: str,
+    method: str,
+    api_key: str,
+    body: dict[str, Any] | None = None,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        fail(f"ZenMux HTTP {exc.code}: {detail[:1000]}")
+    except urllib.error.URLError as exc:
+        fail(f"ZenMux request failed: {exc.reason}")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        fail("ZenMux returned non-JSON data")
+    if not isinstance(value, dict):
+        fail("ZenMux response root must be an object")
+    return value
+
+
+def download(url: str, destination: Path, timeout: int = 300) -> None:
+    request = urllib.request.Request(url, headers={"Accept": "*/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            destination.write_bytes(response.read())
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        fail(f"result download failed: {exc}")
+
+
+def result_urls(response: dict[str, Any]) -> tuple[str | None, str | None]:
+    content = response.get("content")
+    if isinstance(content, list):
+        content = next((item for item in content if isinstance(item, dict)), {})
+    if not isinstance(content, dict):
+        content = {}
+    video_url = content.get("video_url")
+    last_frame_url = content.get("last_frame_url")
+    return (
+        video_url if isinstance(video_url, str) else None,
+        last_frame_url if isinstance(last_frame_url, str) else None,
+    )
+
+
+def write_job(path: Path, response: dict[str, Any], output_dir: Path) -> None:
+    safe = {
+        "id": response.get("id"),
+        "status": response.get("status"),
+        "model": response.get("model"),
+        "outputDir": str(output_dir),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    write_atomic(path, safe)
+
+
+def main() -> int:
+    configure_output()
+    parser = argparse.ArgumentParser(description="Generate a head-follow source video with ZenMux")
+    parser.add_argument("--spec", type=Path, help="JSON generation spec")
+    parser.add_argument("--output-dir", type=Path, default=Path("build/zenmux-head"))
+    parser.add_argument("--api-key-env", default="ZENMUX_API_KEY")
+    parser.add_argument("--base-url", default=os.environ.get("ZENMUX_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument("--poll-seconds", type=int, default=15)
+    parser.add_argument("--timeout-seconds", type=int, default=900)
+    parser.add_argument("--job-id", help="Resume polling an existing ZenMux job")
+    parser.add_argument("--budget", type=Path, help="Explicit submission-count budget JSON; required for a new POST")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and print the request without sending it")
+    args = parser.parse_args()
+
+    if not args.spec and not args.job_id:
+        fail("--spec is required unless --job-id is supplied")
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    body: dict[str, Any] | None = None
+    if args.spec:
+        spec_path = args.spec.resolve()
+        spec = load_json(spec_path)
+        model = spec.get("model", DEFAULT_MODEL)
+        if not isinstance(model, str) or not model.strip():
+            fail("spec.model must be a non-empty string")
+        content = build_content(spec, spec_path.parent)
+        if not args.job_id:
+            try:
+                checked_plan = validate_plan(spec, content, spec_path.parent)
+            except ValueError as exc:
+                fail(str(exc))
+        is_minimax_h3 = "minimax-h3" in model.lower()
+        resolution = spec.get("resolution")
+        if is_minimax_h3:
+            resolution = str(resolution or DEFAULT_RESOLUTION)
+            if resolution not in {"768p", "2K"}:
+                fail("MiniMax H3 resolution must be 768p or 2K")
+        frames = spec.get("frames")
+        duration = spec.get("duration")
+        if frames is not None and duration is not None:
+            fail("frames and duration are mutually exclusive")
+        if frames is not None and (not isinstance(frames, int) or frames < 2):
+            fail("frames must be an integer of at least 2")
+        if duration is not None and (not isinstance(duration, int) or duration <= 0):
+            fail("duration must be a positive integer")
+        reference_images = spec.get("reference_images") or []
+        reference_for_ratio = spec.get("first_frame") or spec.get("reference_image")
+        if not reference_for_ratio and reference_images:
+            reference_for_ratio = reference_images[0]
+        ratio = spec.get("ratio") or infer_ratio(reference_for_ratio, spec_path.parent)
+        if ratio not in COMMON_RATIOS:
+            fail(f"ratio must be one of: {', '.join(COMMON_RATIOS)}")
+        body = {
+            "model": model,
+            "content": content,
+            "ratio": ratio,
+            "generate_audio": False,
+            "watermark": False,
+            "return_last_frame": True,
+        }
+        if resolution is not None:
+            body["resolution"] = str(resolution)
+        if spec.get("seed") is not None:
+            body["seed"] = spec["seed"]
+        if frames is None:
+            body["duration"] = duration
+        else:
+            body["frames"] = frames
+        extra = spec.get("extra", {})
+        if extra:
+            if not isinstance(extra, dict):
+                fail("spec.extra must be an object")
+            reserved = {"model", "content", "resolution", "ratio", "duration", "frames", "seed", "generate_audio", "watermark", "return_last_frame"}
+            conflicts = sorted(reserved.intersection(extra))
+            if conflicts:
+                fail(f"spec.extra cannot override standard fields: {', '.join(conflicts)}")
+            body.update(extra)
+
+    if args.dry_run:
+        if body is None:
+            fail("--dry-run requires --spec")
+        try:
+            budget = load_json(args.budget.resolve()) if args.budget else dict(maxSubmissions=1, attempts=[])
+            cost_preview = check_limits(budget, body)
+            stage_preview = check_stage(spec.get('production'), spec_path.parent, budget['attempts'],body,
+                                        args.budget.resolve().parent if args.budget else spec_path.parent)
+        except (ValueError, KeyError, OSError) as exc:
+            fail(str(exc))
+        preview = json.loads(json.dumps(body))
+        for item in preview['content']:
+            for field in ('image_url', 'video_url', 'audio_url'):
+                if field in item:
+                    item[field]['url'] = '[media omitted; validated locally]'
+        print(json.dumps({"url": f"{args.base_url.rstrip('/')}/videos", "body": preview,
+                          "motionPlan": checked_plan if not args.job_id else None,
+                          "costLimits": cost_preview, "production": stage_preview}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.api_key_env == "ZENMUX_API_KEY":
+        api_key, _ = configured_api_key()
+    else:
+        api_key = os.environ.get(args.api_key_env, "").strip()
+    if not api_key:
+        print(f"未检测到 ZenMux API Key：{args.api_key_env}", file=sys.stderr)
+        print("请先在 ZenMux 控制台的 Subscription 或 Pay As You Go → API Keys 页面创建 Key。", file=sys.stderr)
+        print(f'当前 PowerShell 会话：$env:{args.api_key_env} = "<your-key>"', file=sys.stderr)
+        print(f'当前用户永久配置：[Environment]::SetEnvironmentVariable("{args.api_key_env}", "<your-key>", "User")', file=sys.stderr)
+        print("也可用隐藏输入保存到 kk-head-follow 本地配置：python scripts/zenmux_config.py set", file=sys.stderr)
+        print("官方说明：https://zenmux.ai/docs/guide/quickstart", file=sys.stderr)
+        return 2
+
+    if args.job_id:
+        job_id = args.job_id
+        existing_path = output_dir / 'job.json'
+        if existing_path.exists() and load_json(existing_path).get('id') != job_id:
+            fail('output directory belongs to a different job')
+        response = request_json(f"{args.base_url.rstrip('/')}/videos/{job_id}", "GET", api_key)
+    else:
+        if not args.budget:
+            fail('new submissions require --budget; use --job-id to resume an existing job')
+        try:
+            reservation = reserve(args.budget, output_dir, body, spec.get('production'), spec_path.parent)
+        except (ValueError, KeyError, OSError) as exc:
+            fail(str(exc))
+        # Save the real prompt and content hashes, never local credentials or signed URLs.
+        import hashlib
+        audit_content=[]
+        for item in body['content']:
+            if item['type']=='text':
+                audit_content.append(item)
+            else:
+                value=item[item['type']]['url']
+                audit_content.append(dict(type=item['type'],role=item.get('role'),
+                                          mediaSha256=hashlib.sha256(value.encode('utf-8')).hexdigest()))
+        write_atomic(output_dir/'request-audit.json',dict(motionPlan=checked_plan,
+                     request={**body,'content':audit_content},promptValidation='not-a-generation-quality-guarantee'))
+        response = request_json(f"{args.base_url.rstrip('/')}/videos", "POST", api_key, body)
+        job_id = response.get("id")
+        if not isinstance(job_id, str) or not job_id:
+            fail("ZenMux submit response did not contain an id")
+        write_atomic(output_dir / 'submission.json', {**reservation, 'state': 'submitted', 'id': job_id})
+    job_path = output_dir / "job.json"
+    write_job(job_path, response, output_dir)
+    deadline = time.monotonic() + args.timeout_seconds
+
+    while response.get("status") not in TERMINAL_STATES:
+        if time.monotonic() >= deadline:
+            fail(f"poll timeout; job id preserved in {job_path}: {job_id}")
+        time.sleep(max(1, args.poll_seconds))
+        response = request_json(f"{args.base_url.rstrip('/')}/videos/{job_id}", "GET", api_key)
+        write_job(job_path, response, output_dir)
+
+    if response.get("status") != "succeeded":
+        error = response.get("error")
+        fail(f"ZenMux job failed: {json.dumps(error, ensure_ascii=False)}")
+
+    video_url, last_frame_url = result_urls(response)
+    if not video_url:
+        fail("successful ZenMux response did not contain content.video_url")
+    download(video_url, output_dir / "result.mp4")
+    if last_frame_url:
+        suffix = Path(urllib.parse.urlparse(last_frame_url).path).suffix or ".jpg"
+        download(last_frame_url, output_dir / f"last-frame{suffix}")
+    print(json.dumps({"status": "succeeded", "jobId": job_id, "outputDir": str(output_dir)}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

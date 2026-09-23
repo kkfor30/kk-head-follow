@@ -1,0 +1,21 @@
+{
+  "model": "minimax/minimax-h3-max",
+  "prompt": "Locked camera, same subject and composition as the supplied reference. Preserve the subject's identity, original expression and mouth state, appearance, lighting and background. Keep the torso, shoulders and neck attachment in place, with the entire head and its movement inside the frame.\n\nStarting in the supplied upward-looking pose, make ONE smooth clockwise circular sweep of the viewing direction in the screen plane. The head and both eyes track the same direction throughout this single unbroken motion. The trajectory continuously curves from above the camera toward screen-right, below the camera, screen-left, and back above the camera, passing through every intermediate diagonal without stopping or resetting at any direction. The head turns with the horizontal component and the chin lifts or lowers with the vertical component; the face remains visible. Use a natural comfortable range and an even progressing pace. Do not substitute sideways rocking, repeated left-right glances, or separate held poses for the circular sweep.\n\nBoth eyes follow where the face is turning, including above and below; do not maintain eye contact with the lens or glance back at the viewer during the sweep. Keep the motion continuous through the final upper-left arc into the supplied upward-looking final pose, matching the initial head orientation, chin height and gaze. Do not add a return to a neutral camera-facing pose. Preserve the original scene content, with no visible tracking object, marker, text, camera movement or body movement.",
+  "first_frame": "assets/up-seam.png",
+  "loop_frame": true,
+  "resolution": "768p",
+  "ratio": "1:1",
+  "duration": 5,
+  "seed": -1,
+  "generate_audio": false,
+  "return_last_frame": true,
+  "motionPlan": {
+    "kind": "closed-orbit",
+    "coordinateSystem": "screen",
+    "path": "clockwise",
+    "seamDirection": "up",
+    "seamPoseVerified": true,
+    "evidence": "source/input-review.md",
+    "durationReason": "Example parameter only: select a supported duration after assessing motion range; this is not a validated recipe."
+  }
+}
