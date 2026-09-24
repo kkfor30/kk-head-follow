@@ -241,7 +241,20 @@ def build(spec: dict, root: Path) -> None:
         raise ValueError("upperStep must be a positive integer")
     main = frames(root / spec["sourceVideo"], size)
     upper = frames(root / spec["upperVideo"], size, upper_step) if spec.get("upperVideo") else []
-    route, anchors, origins, source_range = assemble_route(main, upper, spec)
+    preview = spec.get('preview')
+    if preview is not None:
+        from candidate_preview import validate_preview
+        if upper or 'mainAnchors' in spec or 'phaseSamples' in spec:
+            raise ValueError('candidate preview uses a continuous sourceRange, not invented direction anchors')
+        start,end=spec.get('sourceRange',[0,len(main)])
+        if any(type(v) is not int for v in (start,end)) or not 0<=start<end<=len(main):
+            raise ValueError('invalid candidate sourceRange')
+        route=main[start:end];source_range=[start,end]
+        origins=[dict(source=spec['sourceVideo'],frame=i) for i in range(start,end)]
+        validate_preview(preview,len(route))
+        anchors=[v[1] for v in preview['samples']]  # contact sheet positions, never direction labels
+    else:
+        route, anchors, origins, source_range = assemble_route(main, upper, spec)
     lineage_meta = None
     if spec.get('frameLineage'):
         from video_lineage import load_lineage, annotate
@@ -325,6 +338,8 @@ def build(spec: dict, root: Path) -> None:
     if background_mode == "fit-edge-light":
         base_crop = fit_light_background(base_crop)
     output = root / spec["outputDir"]
+    if preview is not None and (output/'manifest.json').exists():
+        raise ValueError('preserve existing candidate; use a new outputDir')
     output.mkdir(parents=True, exist_ok=True)
     selected = []
     for frame in route:
@@ -416,6 +431,10 @@ def build(spec: dict, root: Path) -> None:
     if lineage_meta:
         manifest['frameLineage']=lineage_meta
         manifest['sourceHashes'][spec['originalSource']]=lineage_meta['sourceSha256']
+    if preview is not None:
+        manifest.pop('directionFrames')
+        manifest['preview']=preview
+        manifest['sheetHashes']={p:hashlib.sha256((output/p).read_bytes()).hexdigest() for p in sheets}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 

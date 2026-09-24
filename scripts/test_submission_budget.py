@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import generate_zenmux_video as generator
 from submission_budget import reserve, check_limits, check_stage
+from test_generation_controls import fixture_spec, inspected_fixture
 
 
 class BudgetTests(unittest.TestCase):
@@ -21,8 +22,9 @@ class BudgetTests(unittest.TestCase):
         self.output.mkdir()
         self.spec = self.root / 'spec.json'
         (self.root/'input-review.md').write_text('Offline budget test; no real media generation.')
-        self.spec.write_text(json.dumps(dict(prompt='A continuous head turn.',duration=5,
-            motionPlan=dict(kind='diagnostic',evidence='input-review.md',durationReason='Offline fixture'))))
+        spec = fixture_spec(self.root)
+        inspected_fixture(spec, self.root)
+        self.spec.write_text(json.dumps(spec))
 
     def run_cli(self, extra):
         with patch('sys.argv', ['generator', '--output-dir', str(self.output), *extra]), contextlib.redirect_stdout(io.StringIO()):

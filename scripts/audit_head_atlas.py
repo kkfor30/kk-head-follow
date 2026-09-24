@@ -8,6 +8,8 @@ from validate_head_manifest import validate
 
 def audit(path, root, output, review_path=None, approve=False):
     m = read(path)
+    if m.get('preview') is not None:
+        raise ValueError('experimental preview has no direction certificate; use offline review_head_atlas, not --approve')
     protected=[path, root/m['baseImage'], *[path.parent/p for p in m['sheets']],
                *[root/p for p in m.get('sourceHashes',{})]]
     if m.get('cleanPlate'):protected.append(root/m['cleanPlate']['path'])
@@ -49,6 +51,8 @@ if __name__ == '__main__':
     p.add_argument('--approve', action='store_true')
     a = p.parse_args()
     path, root = a.manifest.resolve(), a.root.resolve()
+    if read(path).get('preview') is not None:
+        p.error('experimental previews cannot receive direction certificates; use review_head_atlas.py')
     if a.write_review_template:
         if a.write_review_template.exists():
             p.error('refusing to overwrite existing observations')

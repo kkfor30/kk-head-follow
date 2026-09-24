@@ -20,8 +20,10 @@ from typing import Any
 from PIL import Image
 
 from zenmux_config import configured_api_key
-from submission_budget import reserve, write_atomic, check_limits, check_stage
+from submission_budget import reserve, write_atomic, submission_preflight
 from generation_plan import validate_plan
+from generation_controls import (request_options, validate_requirements, review_template,
+                                 validate_review, provider_observation, archive_inputs, PROFILE_DATE)
 
 DEFAULT_BASE_URL = "https://zenmux.ai/api/v1"
 DEFAULT_MODEL = "minimax/minimax-h3-max"
@@ -129,10 +131,11 @@ def build_content(spec: dict[str, Any], base_dir: Path) -> list[dict[str, Any]]:
         last_frame = first_frame
     if last_frame and not first_frame:
         fail("last_frame requires first_frame")
-    reference_mode = bool(spec.get("reference_image") or spec.get("reference_images"))
+    reference_mode = any(spec.get(k) for k in ('reference_image', 'reference_images', 'reference_video',
+                                              'reference_videos', 'reference_audio', 'reference_audios'))
     frame_mode = bool(first_frame or last_frame)
     if reference_mode and frame_mode:
-        fail("reference_image(s) is mutually exclusive with first_frame/last_frame (MiniMax error 2013)")
+        fail("reference image/video/audio is mutually exclusive with first_frame/last_frame")
 
     for field, content_type, role in media_fields:
         value = spec.get(field)
@@ -146,16 +149,14 @@ def build_content(spec: dict[str, Any], base_dir: Path) -> list[dict[str, Any]]:
                     content_type: {"url": local_media_uri(str(value), base_dir)},
                 }
             )
-    references = spec.get("reference_images", [])
-    if references:
+    for key, role, kind in [('reference_images','reference_image','image_url'),
+                            ('reference_videos','reference_video','video_url'),
+                            ('reference_audios','reference_audio','audio_url')]:
+        references = spec.get(key, [])
         if not isinstance(references, list):
-            fail("reference_images must be an array")
+            fail(f'{key} must be an array')
         for reference in references:
-            content.append({
-                "type": "image_url",
-                "role": "reference_image",
-                "image_url": {"url": local_media_uri(str(reference), base_dir)},
-            })
+            content.append({'type':kind, 'role':role, kind:{'url':local_media_uri(str(reference),base_dir)}})
     return content
 
 
@@ -226,6 +227,30 @@ def write_job(path: Path, response: dict[str, Any], output_dir: Path) -> None:
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
     write_atomic(path, safe)
+    observation_path = output_dir / 'provider-observation.json'
+    previous = load_json(observation_path) if observation_path.exists() else None
+    write_atomic(observation_path, provider_observation(response, previous))
+
+
+def prepare_request(spec, base_dir, require_review=True):
+    content = build_content(spec, base_dir)
+    checked_plan = validate_plan(spec, content, base_dir, require_evidence=require_review)
+    warnings = validate_requirements(spec['motionPlan'], content)
+    references = spec.get('reference_images') or []
+    reference = spec.get('first_frame') or spec.get('reference_image') or (references[0] if references else None)
+    ratio = spec.get('ratio') or infer_ratio(reference, base_dir)
+    if ratio not in COMMON_RATIOS:
+        raise ValueError(f'ratio must be one of {tuple(COMMON_RATIOS)}')
+    body = request_options(spec, content, ratio)
+    if len(json.dumps(body).encode('utf-8')) > 64 * 1024**2:
+        raise ValueError('encoded request exceeds 64 MB')
+    review = validate_review(base_dir/spec['motionPlan']['evidence'], body, spec['motionPlan']) if require_review else None
+    if any(i.get('role') in ('first_frame','last_frame') for i in content):
+        warnings.append('image-to-video uses image aspect ratio; requested ratio is not an image resize operation')
+    return body, checked_plan, dict(profileDate=PROFILE_DATE, provider='zenmux', inputReview=review,
+        requestedExpansion=body.get('extra',{}).get('prompt_expansion_mode','not-profiled'),
+        effectivePrompt='unknown-until-provider-returns-it', warnings=warnings,
+        liveAdapterValidation='not-proven-by-offline-checks')
 
 
 def main() -> int:
@@ -240,6 +265,8 @@ def main() -> int:
     parser.add_argument("--job-id", help="Resume polling an existing ZenMux job")
     parser.add_argument("--budget", type=Path, help="Explicit submission-count budget JSON; required for a new POST")
     parser.add_argument("--dry-run", action="store_true", help="Validate and print the request without sending it")
+    parser.add_argument('--write-input-review', type=Path, help='Write an unreviewed input template; no network or budget')
+    parser.add_argument('--identity', type=Path, help='Original identity baseline for the input review template')
     args = parser.parse_args()
 
     if not args.spec and not args.job_id:
@@ -248,72 +275,34 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     body: dict[str, Any] | None = None
-    if args.spec:
+    if args.write_input_review and (args.job_id or args.dry_run or not args.spec or not args.identity):
+        fail('--write-input-review needs --spec and --identity, and cannot combine with resume/dry-run')
+    if args.spec and not args.job_id:
         spec_path = args.spec.resolve()
         spec = load_json(spec_path)
-        model = spec.get("model", DEFAULT_MODEL)
-        if not isinstance(model, str) or not model.strip():
-            fail("spec.model must be a non-empty string")
-        content = build_content(spec, spec_path.parent)
-        if not args.job_id:
-            try:
-                checked_plan = validate_plan(spec, content, spec_path.parent)
-            except ValueError as exc:
-                fail(str(exc))
-        is_minimax_h3 = "minimax-h3" in model.lower()
-        resolution = spec.get("resolution")
-        if is_minimax_h3:
-            resolution = str(resolution or DEFAULT_RESOLUTION)
-            if resolution not in {"768p", "2K"}:
-                fail("MiniMax H3 resolution must be 768p or 2K")
-        frames = spec.get("frames")
-        duration = spec.get("duration")
-        if frames is not None and duration is not None:
-            fail("frames and duration are mutually exclusive")
-        if frames is not None and (not isinstance(frames, int) or frames < 2):
-            fail("frames must be an integer of at least 2")
-        if duration is not None and (not isinstance(duration, int) or duration <= 0):
-            fail("duration must be a positive integer")
-        reference_images = spec.get("reference_images") or []
-        reference_for_ratio = spec.get("first_frame") or spec.get("reference_image")
-        if not reference_for_ratio and reference_images:
-            reference_for_ratio = reference_images[0]
-        ratio = spec.get("ratio") or infer_ratio(reference_for_ratio, spec_path.parent)
-        if ratio not in COMMON_RATIOS:
-            fail(f"ratio must be one of: {', '.join(COMMON_RATIOS)}")
-        body = {
-            "model": model,
-            "content": content,
-            "ratio": ratio,
-            "generate_audio": False,
-            "watermark": False,
-            "return_last_frame": True,
-        }
-        if resolution is not None:
-            body["resolution"] = str(resolution)
-        if spec.get("seed") is not None:
-            body["seed"] = spec["seed"]
-        if frames is None:
-            body["duration"] = duration
-        else:
-            body["frames"] = frames
-        extra = spec.get("extra", {})
-        if extra:
-            if not isinstance(extra, dict):
-                fail("spec.extra must be an object")
-            reserved = {"model", "content", "resolution", "ratio", "duration", "frames", "seed", "generate_audio", "watermark", "return_last_frame"}
-            conflicts = sorted(reserved.intersection(extra))
-            if conflicts:
-                fail(f"spec.extra cannot override standard fields: {', '.join(conflicts)}")
-            body.update(extra)
+        try:
+            body, checked_plan, controls = prepare_request(spec, spec_path.parent, not args.write_input_review)
+            if args.write_input_review:
+                target = args.write_input_review.resolve()
+                if target != (spec_path.parent/spec['motionPlan']['evidence']).resolve():
+                    raise ValueError('review output must equal motionPlan.evidence resolved relative to spec')
+                if target.exists():
+                    raise ValueError('review already exists; preserve observations and write a new review path')
+                template = review_template(spec, body, spec_path.parent, args.identity, target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                write_atomic(target, template)
+                print(json.dumps(dict(inputReview=str(target), status='unreviewed'), ensure_ascii=False))
+                return 0
+        except (ValueError, OSError, KeyError) as exc:
+            fail(str(exc))
 
     if args.dry_run:
         if body is None:
             fail("--dry-run requires --spec")
         try:
-            budget = load_json(args.budget.resolve()) if args.budget else dict(maxSubmissions=1, attempts=[])
-            cost_preview = check_limits(budget, body)
-            stage_preview = check_stage(spec.get('production'), spec_path.parent, budget['attempts'],body,
+            budget = load_json(args.budget.resolve()) if args.budget else dict(schemaVersion=1,
+                purpose='Offline default pilot preview',maxSubmissions=1, attempts=[])
+            cost_preview,stage_preview = submission_preflight(budget,output_dir,body,spec.get('production'),spec_path.parent,
                                         args.budget.resolve().parent if args.budget else spec_path.parent)
         except (ValueError, KeyError, OSError) as exc:
             fail(str(exc))
@@ -324,7 +313,8 @@ def main() -> int:
                     item[field]['url'] = '[media omitted; validated locally]'
         print(json.dumps({"url": f"{args.base_url.rstrip('/')}/videos", "body": preview,
                           "motionPlan": checked_plan if not args.job_id else None,
-                          "costLimits": cost_preview, "production": stage_preview}, ensure_ascii=False, indent=2))
+                          "costLimits": cost_preview, "production": stage_preview,
+                          "generationControls": controls}, ensure_ascii=False, indent=2))
         return 0
 
     if args.api_key_env == "ZENMUX_API_KEY":
@@ -351,6 +341,8 @@ def main() -> int:
             fail('new submissions require --budget; use --job-id to resume an existing job')
         try:
             reservation = reserve(args.budget, output_dir, body, spec.get('production'), spec_path.parent)
+            input_archive = archive_inputs(output_dir,body,spec_path.parent/spec['motionPlan']['evidence'],
+                                           controls['inputReview']['inputReviewSha256'])
         except (ValueError, KeyError, OSError) as exc:
             fail(str(exc))
         # Save the real prompt and content hashes, never local credentials or signed URLs.
@@ -364,7 +356,8 @@ def main() -> int:
                 audit_content.append(dict(type=item['type'],role=item.get('role'),
                                           mediaSha256=hashlib.sha256(value.encode('utf-8')).hexdigest()))
         write_atomic(output_dir/'request-audit.json',dict(motionPlan=checked_plan,
-                     request={**body,'content':audit_content},promptValidation='not-a-generation-quality-guarantee'))
+                     request={**body,'content':audit_content},generationControls=controls,inputArchive=input_archive,
+                     promptValidation='submitted-prompt-not-necessarily-effective-model-prompt'))
         response = request_json(f"{args.base_url.rstrip('/')}/videos", "POST", api_key, body)
         job_id = response.get("id")
         if not isinstance(job_id, str) or not job_id:

@@ -142,6 +142,8 @@ def repair(path, root, spec, output):
         raise ValueError('repair output already exists; preserve earlier candidates')
     validate(root,path)
     m=read(path); original=copy.deepcopy(m)
+    if m.get('preview') is not None:
+        raise ValueError('experimental preview repair needs source processing and a new compile; direction-ring repair is not applicable')
     frames=load_frames(m,path); w,h=m['crop'][2:]; x,y=m['crop'][:2]
     base=np.array(Image.open(root/m['baseImage']).convert('RGB').crop((x,y,x+w,y+h)))
     operations=spec.get('operations',[])

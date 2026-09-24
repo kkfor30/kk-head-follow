@@ -8,7 +8,9 @@ from PIL import Image, ImageDraw
 from inspect_atlas_seams import transition_metrics
 
 
-def sweep_indices(count):
+def sweep_indices(count, arc=False):
+    if arc:
+        return list(range(count))+list(range(count-2,-1,-1))
     # Exercise both wrap directions, rather than bouncing at the last frame.
     return list(range(count))*2 + [0] + list(range(count-1,-1,-1))*2
 
@@ -60,7 +62,8 @@ def review(manifest_path, root, output):
     contact(list(range(len(frames))),'all')
     contact(selected,'repair')
     # Deterministic frame sweeps test asset continuity, not browser events/performance.
-    path=sweep_indices(len(frames))
+    arc=m.get('preview',{}).get('mode')=='arc'
+    path=sweep_indices(len(frames),arc)
     scenes[path[0]].save(output/'scene-sweep.webp',save_all=True,
         append_images=[scenes[i] for i in path[1:]],duration=55,loop=0,lossless=True)
     frames[path[0]].save(output/'detail-sweep.webp',save_all=True,
@@ -70,8 +73,10 @@ def review(manifest_path, root, output):
         frameCount=len(frames),syntheticFrames=synthetic,metrics=metrics,
         inspectionRequired=['all repair sheets','all native sheets','scene and detail sweeps'],
         status='evidence-ready-not-visually-reviewed',browserInteraction='not-tested',sweepFrameIndices=path,
+        candidateMode=m.get('preview',{}).get('mode'),sweepMode='back-and-forth-no-wrap' if arc else 'bidirectional-with-wrap',
         limitations=['Metrics do not identify gaze, ghosting, roll or motion direction.',
-                      'Frame sweeps do not exercise the pointer controller.'])
+                      'Frame sweeps do not exercise the pointer controller.',
+                      'Wrap boundary metrics for an arc are diagnostic only; its endpoints need not connect.'])
     (output/'review.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     return report
 

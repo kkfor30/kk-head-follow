@@ -1,50 +1,57 @@
-# 连续头部与视线视频的生产方案
+# 动作描述与视觉输入
 
-目标是在主体前方的有限视线范围内完成屏幕平面的顺时针圆周轨迹：上→右上→右→右下→下→左下→左→左上→上，中间不断开、不在方向点停留。横向用真实转脸（yaw），纵向用抬低头（pitch）；允许自然侧倾，但仅摆头或转眼不能替代方向变化。左右始终指屏幕方向。不会要求头颅水平自转露出后脑勺。
+先按 generation-planning.md 选择路线。以下是候选写法，未经过新增跨素材生成验证，不是成功配方。
 
-输入决定身份、表情、嘴部状态、配饰和身体姿态，只规定所需头眼运动；不预设闭嘴、微笑或水平头部。保留完整头颈和运动余量，镜头和身体保持固定。
+## 提示词结构
 
-## 选择一个明确方案
-
-优先复用已验收素材的真实请求、首尾图和后处理记录。成功如果依靠后续补上弧，不能归因于一句主提示词。
-
-- **closed-orbit**：先有已核对的抬头接缝图，将同一图实际作为首尾约束。整片从上方开始、连续走一圈回到同一上方姿态。正视原图不是上方接缝图；不能只改字段称它为抬头。准备接缝图的来源和额外成本须说明，不默认悄悄生成。
-- **entry-orbit**：只有正视原图时可选择进入段，再完整走上→上一个周期。整个文件首尾不必一致，但内部必须存在完整周期；进入段排除。这个方案更依赖模型执行，不能靠裁掉尾部凭空闭环。
-- **upper-arc**：仅在已有主方向素材基本可用、程序不能可靠补小接缝时，采用主视频实际左上/右上帧作为首尾参考补上弧。两侧与主片的衔接仍要查。
-- **diagnostic**：可选的单轴诊断，不能交付完整方向跟随；不是默认必经成本。
-
-默认显式选择 5 秒作为低成本小样，不保证动作一定完整。延长需有具体理由和对应预算，不能仅凭“可能更稳”自动加长。无接口证据不猜时长范围；先 dry-run 核对请求，候选小样经检查后才扩展多个主体。
-
-## 同一上方首尾的候选提示词
-
-下面是本轮纠正生产逻辑后的候选，尚未通过新素材生成验证，不能保证模型一次完整执行。仅用于真实首尾图都是同一抬头姿态的 closed-orbit：
+从 motionPlan.requirements 提取：实际首图状态 → 允许运动部位 → 连续经过的可见状态 → 幅度与特征可见性 → 固定项 → 终态。身份、表情、嘴部状态沿用输入，不发明年龄、风格或配饰。不单纯追求长或短；删除矛盾与重复，保留具体动作。
 
 ```text
-Locked camera, same subject and composition as the supplied reference. Preserve the subject's identity, original expression and mouth state, appearance, lighting and background. Keep the torso, shoulders and neck attachment in place, with the entire head and its movement inside the frame.
-
-Starting in the supplied upward-looking pose, make ONE smooth clockwise circular sweep of the viewing direction in the screen plane. The head and both eyes track the same direction throughout this single unbroken motion. The trajectory continuously curves from above the camera toward screen-right, below the camera, screen-left, and back above the camera, passing through every intermediate diagonal without stopping or resetting at any direction. The head turns with the horizontal component and the chin lifts or lowers with the vertical component; the face remains visible. Use a natural comfortable range and an even progressing pace. Do not substitute sideways rocking, repeated left-right glances, or separate held poses for the circular sweep.
-
-Both eyes follow where the face is turning, including above and below; do not maintain eye contact with the lens or glance back at the viewer during the sweep. Keep the motion continuous through the final upper-left arc into the supplied upward-looking final pose, matching the initial head orientation, chin height and gaze. Do not add a return to a neutral camera-facing pose. Preserve the original scene content, with no visible tracking object, marker, text, camera movement or body movement.
+Use the supplied images for the same subject, original expression, mouth state,
+appearance and framing. The first image shows [ACTUAL START POSE].
+In one continuous shot, [ALLOWED PARTS] follow an unseen target along
+[PATH IN SCREEN COORDINATES], through [OBSERVABLE INTERMEDIATE STATES],
+reaching [ACTUAL END POSE].
+The horizontal motion is [DESIRED FACE TURN]; the vertical motion is
+[DESIRED CHIN MOVEMENT]. Keep [TASK-CRITICAL FEATURES] readable throughout.
+Use [SUBJECT-SPECIFIC RANGE]. Keep [FIXED PARTS], camera and framing stable.
+[ENDING AND LOOP INTENT]. No [RELEVANT UNWANTED MOTIONS].
 ```
 
-不要同时要求“眼睛始终朝镜头”和“头眼一起追踪方向”。尾图约束只约束姿态意图，不保证回到原像素、速度一致或眼神正确，必须查成片。
+替换方括号；不存在的幅度图/中间关键帧不能写成 supplied reference。无可见眼睛的角色不套瞳孔模板。侧倾可为伴随动作，不能替代任务明确要求的转脸。
 
-entry-orbit 应把起始与结束句替换为明确进入段：从原中性姿态平滑进入上方视线，再完成一次连续圆周，最后回到该上方方向。不能写 supplied upward starting pose，不能宣称其文件首尾闭合；对内部周期逐帧核验。其 motionPlan 设置 firstPose=neutral、cycleStart=up、cycleEnd=up、excludeEntry=true。
+## 路线写法
 
-## 上弧候选
+**closed-orbit**：实际提交合适抬头图作首尾。描述上→屏幕右→下→左→上的连续轨迹及中间方向。相同首尾仍可能生成静止、往返、反向和停顿，必须核对完整片及接缝两侧速度。
 
-仅在实际同时发送首尾图时使用：
+**entry-orbit**：明确从图中实际中性姿态进入上方，再完成整圈。不能写 supplied upward starting pose，也不将中性图改名为 up。文字时间不是精确时序；从实片找进入段，不靠裁切填补缺失姿态。
 
+**reference-motion**：
 ```text
-A locked close-up of the same subject. Starting from the supplied upward-left pose, make one continuous gentle turn through above-center into the supplied upward-right final pose. Keep the chin lifted and both eyes coordinated with the face toward the same viewing direction throughout. Use an even progressing pace, without a pause or a neutral/downward detour. Preserve the input identity, expression, mouth state, neck attachment, shoulders, background, lighting and framing. Keep the entire head visible and add no object, text or camera movement.
+Image 1 defines the subject's identity, expression, clothing and composition.
+Video 1 demonstrates the order, amplitude and coordination of the movement.
+Apply that movement to the subject in Image 1 while preserving its appearance.
+Adapt the motion to [TARGET SUBJECT'S RANGE]. Keep [FIXED PARTS] stable.
+Do not transfer the reference performer's appearance or camera motion.
 ```
 
-中心按实帧标定，不假定恰好时长一半；实际首尾图约束不等于两侧接缝已通过。
+引用编号与实际提交顺序对应。人类示范不能无条件套到动物；示范先核验。该模式与精确 first_frame/last_frame 互斥，不能假装同时拥有两种约束。随包犬视频不是所有主体的默认驱动。
 
-## 提交前与生成后
+**segment / upper-arc**：每段写清起点、从哪一侧经过、终点与衔接意图。例如右上→上→左上，不仅是“从右到左”。后续首图取前段已核验实帧，并始终对照原始身份；末图可重新准备。不要仅检查两张相似端点，接缝前后多帧趋势同样重要。
 
-记录 motionPlan、本地输入姿态核对文件、实际提示词、首尾图、画幅、时长和预算。return_last_frame 仅返回尾帧，不是 last_frame；参考图模式和首尾图模式不能混用。细节见 [zenmux.md](zenmux.md)。不让输入中性与要求上方首尾的矛盾进入付费请求。
+## 图文一致
 
-生成后先查全画面，再查局部：是否完整经过实际方向、眼神是否与脸一致、是否有停留/反向/回正、是否新增物体、身体和背景是否漂移。双眼看不清就记录未知。接缝检查至少前后多帧的姿态及运动趋势，不只比第 0 帧与最后帧。
+- 面部可见不等于眼睛始终看镜头。画外注视不能同时要求持续镜头对视。
+- orbit 明确是谁绕什么，区分视线轨迹、头颅自转、身体绕圈和镜头环绕。
+- 固定颈根不等于冻结所有颈部像素。身体/背景精确保留优先由合成实现。
+- 图片过度仰头、遮眼或已变脸，先换输入，不用文字否定图片。
+- 眨眼按用途判断；随时停帧的素材要检查可用区间，不把所有自然动作一概禁止眨眼。
+- 眼神、鼻尖、双颊和耳朵可见变化分别核对；像素移动不等于真实转脸。
 
-基本可用后按 [repair-and-review.md](repair-and-review.md) 先做程序处理。背景和后处理造成的残影不直接归咎于源视频；大段姿态缺失不能靠插帧或改标签造出。需要新增生成时依据已经存在的用户授权和次数预算，不自动重试。
+## 扩写与失败修复
+
+Max 显式选择 prompt_expansion_mode，映射见 zenmux.md。disabled 便于定位手写约束作用；balanced / quality 可对照，名称不代表质量已更好。保留提交文字和服务返回扩写；未返回写 unknown，不能宣称模型原样使用提交文字。
+
+失败定位：输入不适合→修参考；路线歧义→动作示范/必要分段；文字冲突→改描述；仅速度不均→实片标定；仅背景不符→修合成。下一次获授权生成记录主要变量，连续同类失败时改变控制方式，不只叠加禁止句。交付可同时修改多项，但不能据此单独归因。
+
+依据：[MiniMax 首尾提示词指南](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md)、[参考模式指南](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md)。接口字段仍按当前实际服务核对。

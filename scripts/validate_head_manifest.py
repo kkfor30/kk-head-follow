@@ -17,12 +17,12 @@ def require(condition: bool, message: str) -> None:
 @lru_cache(maxsize=64)
 def source_frame_count(path: str, sha256: str) -> int:
     """Decode-count the hashed source; do not trust hand-written frame counts."""
-    result = subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-count_frames',
-        '-show_entries','stream=nb_read_frames','-of','json',path],check=True,capture_output=True,text=True)
-    streams=json.loads(result.stdout).get('streams',[])
     try:
+        result = subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-count_frames',
+            '-show_entries','stream=nb_read_frames','-of','json',path],check=True,capture_output=True,text=True,timeout=120)
+        streams=json.loads(result.stdout).get('streams',[])
         count=int(streams[0]['nb_read_frames'])
-    except (KeyError,IndexError,ValueError,TypeError) as exc:
+    except (OSError,subprocess.SubprocessError,KeyError,IndexError,ValueError,TypeError) as exc:
         raise ValueError('cannot decode-count source: '+path) from exc
     require(count>0,'source video has no readable frames')
     return count
@@ -44,9 +44,17 @@ def validate(root: Path, manifest_path: Path, compare: Path | None = None, requi
     require(x<=eye[0]*sw<x+w and y<=eye[1]*sh<y+h, "eye is outside crop")
     count, columns, per_sheet = (m[k] for k in ("frameCount","columns","framesPerSheet"))
     require(all(type(v) is int and v>0 for v in [count,columns,per_sheet]), "invalid atlas capacity")
-    a=m["directionFrames"]
-    require(len(a)==8 and a[0]==0 and all(type(v) is int and 0<=v<count for v in a)
-            and all(left<right for left,right in zip(a,a[1:])), "invalid or duplicate direction anchors")
+    if m.get('preview') is not None:
+        from candidate_preview import validate_preview
+        validate_preview(m['preview'],count)
+        require(not require_ready,'experimental preview cannot be ready')
+        require('directionFrames' not in m and 'phaseSamples' not in m and m.get('quality',{}).get('status')!='reviewed',
+                'preview cannot claim certified directions')
+        a=[]
+    else:
+        a=m["directionFrames"]
+        require(len(a)==8 and a[0]==0 and all(type(v) is int and 0<=v<count for v in a)
+                and all(left<right for left,right in zip(a,a[1:])), "invalid or duplicate direction anchors")
     if m.get('phaseSamples') is not None:
         from atlas_quality import validate_phases
         validate_phases(m['phaseSamples'], count, a)
@@ -63,6 +71,8 @@ def validate(root: Path, manifest_path: Path, compare: Path | None = None, requi
     for number,name in enumerate(sheets):
         path=manifest_path.parent/name
         require(path.is_file(), f"missing sheet: {name}")
+        if m.get('preview') is not None:
+            require(hashlib.sha256(path.read_bytes()).hexdigest()==m.get('sheetHashes',{}).get(name),'candidate sheet changed')
         cells=min(per_sheet,count-number*per_sheet)
         with Image.open(path) as image:
             require(image.width==w*columns and image.height>=math.ceil(cells/columns)*h,
