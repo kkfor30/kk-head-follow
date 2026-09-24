@@ -1,6 +1,6 @@
 interface:
   display_name: "kk-head-follow"
-  short_description: "实验版：连续视频制作鼠标方向随动，保留检查证据与能力边界"
-  default_prompt: "使用 $kk-head-follow 制作网页角色的头部与视线跟随，检查真实方向和背景，优先程序修复，保留证据并完成复查后接入页面。"
+  short_description: "实验版：选择视觉约束生成连续动作，制作方向跟随与有明确局限的网页候选"
+  default_prompt: "使用 $kk-head-follow 制作网页角色的头部与视线跟随，按目标选择首尾帧或动作参考，核对实际输入与生成结果，并在真实场景交付可体验候选。"
 policy:
   allow_implicit_invocation: true

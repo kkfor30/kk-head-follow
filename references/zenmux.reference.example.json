@@ -1,8 +1,6 @@
 {
   "model": "minimax/minimax-h3-max",
-  "prompt": "Use the supplied image for the same subject, expression, mouth state, appearance and framing. Starting in the actual upward-looking pose, continuously follow an unseen target above the camera, toward screen-right, below the camera, toward screen-left, and back above the camera. Turn the face with the horizontal movement and lift or lower the chin with the vertical movement; the eyes follow the same target. Preserve the input appearance and keep the face readable. Use the subject-appropriate range established by the inspected input. Keep the torso, camera and framing stable. Complete one continuous trajectory, without a neutral introduction, repeated side-to-side glances or an unrelated movement. Match the supplied upward final pose.",
-  "first_frame": "assets/up-seam.png",
-  "loop_frame": true,
+  "prompt": "Image 1 defines the subject identity, expression, mouth state and composition. Video 1 demonstrates the order, amplitude and coordination of the movement. Apply the demonstrated motion to the subject in Image 1, adapting it to the inspected target anatomy. Keep the original appearance and stable body placement. Do not transfer the reference performer appearance or camera motion. Complete the demonstrated trajectory continuously; endpoint alignment must be checked in the output.",
   "resolution": "768p",
   "ratio": "1:1",
   "duration": 5,
@@ -10,25 +8,22 @@
   "generate_audio": false,
   "return_last_frame": true,
   "motionPlan": {
-    "kind": "closed-orbit",
-    "coordinateSystem": "screen",
-    "path": "clockwise",
-    "seamDirection": "up",
-    "seamPoseVerified": true,
+    "kind": "reference-motion",
+    "referenceRoles": "Image 1: original identity/composition; Video 1: inspected direction order and coordination",
     "evidence": "input-review.json",
-    "durationReason": "Example parameter only: select a supported duration after assessing motion range; this is not a validated recipe.",
+    "durationReason": "一次已授权动作参考试片；另将参考输入费用计入预算",
     "requirements": {
       "identity": {
         "expected": "保留原始身份、表情、嘴部状态与配饰",
         "controls": [
-          "first_frame",
-          "last_frame"
+          "reference_image"
         ],
         "verify": "与原始身份基准对照全片，不能只比较首尾"
       },
       "motion": {
         "expected": "上、右、下、左、上的完整连续屏幕方向环",
         "controls": [
+          "reference_video",
           "prompt"
         ],
         "verify": "逐段核对实际转脸与抬低头，不能用侧倾替代缺失方向"
@@ -36,7 +31,7 @@
       "range": {
         "expected": "按实际主体和用途确定幅度，不能只由极端接缝图决定",
         "controls": [
-          "first_frame",
+          "reference_image",
           "prompt"
         ],
         "verify": "输入检查记录具体幅度意图，成片核对全部极值"
@@ -44,6 +39,7 @@
       "gaze": {
         "expected": "可见眼睛与脸协同追踪目标，遮挡处记未知",
         "controls": [
+          "reference_video",
           "prompt"
         ],
         "verify": "放大检查上下左右及中间段；未知不写通过"
@@ -51,20 +47,19 @@
       "fixedParts": {
         "expected": "固定身体与构图，页面背景沿用原场景",
         "controls": [
-          "first_frame",
+          "reference_image",
           "prompt",
           "compositing"
         ],
         "verify": "对照身体锚点与真实场景合成，检查颈部接缝"
       },
       "loop": {
-        "expected": "首尾姿态和接缝前后运动趋势连续",
+        "expected": "目标需要闭环，但参考模式不提供精确首尾约束",
         "controls": [
-          "first_frame",
-          "last_frame",
+          "reference_video",
           "prompt"
         ],
-        "verify": "比较首尾两侧多帧姿态、运动方向与停顿"
+        "verify": "输出核对姿态与多帧运动趋势，不通过时保留候选或补段"
       },
       "rest": {
         "expected": "当前采用原静态回退；未实现自然回正",
@@ -77,5 +72,11 @@
   },
   "extra": {
     "prompt_expansion_mode": "disabled"
-  }
+  },
+  "reference_images": [
+    "assets/identity.png"
+  ],
+  "reference_videos": [
+    "assets/motion-reference.mp4"
+  ]
 }

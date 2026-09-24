@@ -1,15 +1,16 @@
 import {createFrameAnimator} from './frame-animator.mjs';
 import {mapDirection,angularDistance,inNeutralZone,pointerAngle,validPhases} from './pointer-direction.mjs';
 import {verifyQuality} from './quality-gate.mjs';
+import {previewFrame,previewDegrees,verifyPreviewAssets} from './candidate-preview.mjs';
 
 /**
  * The scene is a position:relative container fitted exactly to the base image.
- * Copy all four .mjs files. Serve through HTTP with JavaScript module MIME.
+ * Copy all five .mjs files. Serve through HTTP with JavaScript module MIME.
  * subjects: [{id, manifest: URL|string}]. rootUrl resolves manifest source paths.
  * Call destroy() on unmount or before switching scenes; ready reports failures per subject.
  */
 export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.',document.baseURI),
-  enabled=()=>true,onState=()=>{},diagnosticPreview=false}) {
+  enabled=()=>true,onState=()=>{},diagnosticPreview=false,experimentalPreview=false}) {
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   const lifetime=new AbortController();
   let generation=0,disposed=false,cleanups=[],pending=[];
@@ -20,16 +21,29 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
     const response=await fetch(manifestUrl,{signal});
     if(!response.ok)throw new Error('manifest could not be loaded');
     const config=await response.json();
-    if(!diagnosticPreview)await verifyQuality(config,manifestUrl,rootUrl,signal);
-    await baseImage.decode();
+    if(![config.frameCount,config.columns,config.framesPerSheet].every(v=>Number.isInteger(v)&&v>0)
+      || !Array.isArray(config.sheets)||config.sheets.length!==Math.ceil(config.frameCount/config.framesPerSheet)
+      || config.sheets.some(v=>typeof v!=='string'||!v)||new Set(config.sheets).size!==config.sheets.length)
+      throw new Error('invalid atlas capacity');
+    if(!Array.isArray(config.sourceSize)||config.sourceSize.length!==2||!config.sourceSize.every(v=>Number.isInteger(v)&&v>0)
+      || !Array.isArray(config.crop)||config.crop.length!==4||!config.crop.every(Number.isInteger))
+      throw new Error('invalid scene geometry');
     const [sw,sh]=config.sourceSize, [x,y,w,h]=config.crop;
+    if(x<0||y<0||w<=0||h<=0||x+w>sw||y+h>sh||!Array.isArray(config.eye)||config.eye.length!==2
+      || !config.eye.every(Number.isFinite)||config.eye[0]*sw<x||config.eye[0]*sw>=x+w
+      || config.eye[1]*sh<y||config.eye[1]*sh>=y+h)throw new Error('invalid crop or eye position');
+    if(config.preview) {
+      if(!experimentalPreview)throw new Error('experimental candidate needs explicit experimentalPreview');
+      await verifyPreviewAssets(config,manifestUrl,rootUrl,signal);
+    } else if(!diagnosticPreview)await verifyQuality(config,manifestUrl,rootUrl,signal);
+    await baseImage.decode();
     if(new URL(config.baseImage,rootUrl).href!==baseImage.src || sw!==baseImage.naturalWidth
       || sh!==baseImage.naturalHeight || (baseImage.dataset.sceneId && config.sceneId!==baseImage.dataset.sceneId))
       throw new Error('atlas belongs to a different scene');
-    if(config.directionFrames?.length!==8 || config.directionFrames[0]!==0
+    if((!config.preview&&(config.directionFrames?.length!==8 || config.directionFrames[0]!==0
       || config.directionFrames.some((v,i,a)=>!Number.isInteger(v)||v<0||v>=config.frameCount||(i&&v<=a[i-1]))
-      || config.sheets?.length!==Math.ceil(config.frameCount/config.framesPerSheet)
-      || !validPhases(config.phaseSamples,config.directionFrames,config.frameCount))throw new Error('invalid atlas metadata');
+      || !validPhases(config.phaseSamples,config.directionFrames,config.frameCount)))
+      || config.sheets?.length!==Math.ceil(config.frameCount/config.framesPerSheet))throw new Error('invalid atlas metadata');
     async function loadImage(url) {const image=new Image();image.src=url;await image.decode();return image;}
     const sheets=await Promise.all(config.sheets.map(file=>loadImage(new URL(file,manifestUrl).href)));
     for(let i=0;i<sheets.length;i++) {
@@ -48,11 +62,16 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
     canvas.style.cssText=`position:absolute;pointer-events:none;left:${x/sw*100}%;top:${y/sh*100}%;width:${w/sw*100}%;height:${h/sh*100}%;visibility:hidden;mix-blend-mode:normal`;
     scene.append(canvas);
     const settings=config.runtime||{},steps=3600;
+    const arc=config.preview?.mode==='arc',arcStart=arc?config.preview.samples[0][0]:0;
+    const arcSpan=arc?config.preview.samples.at(-1)[0]-arcStart:360;
+    const toStep=angle=>arc?(previewDegrees(angle,config.preview)-arcStart)/arcSpan*(steps-1):angle/(Math.PI*2)*steps;
+    const toAngle=step=>arc?(arcStart+step/(steps-1)*arcSpan)*Math.PI/180:step/steps*Math.PI*2;
     // smoothDamp already filters movement; a default deadband makes slow motion stick.
     const hysteresis=(settings.angleHysteresisDegrees??0)*Math.PI/180;
     let animator,visible=true,neutral=true,lastAngle=null,wasActive=null;
     const active=()=>visible&&!document.hidden&&enabled()&&!reduced.matches;
     function draw(frame) {
+      if(frame===null){ctx.clearRect(0,0,w,h);return;}
       const sheet=Math.floor(frame/config.framesPerSheet),cell=frame%config.framesPerSheet;
       ctx.clearRect(0,0,w,h);
       if(plate)ctx.drawImage(plate,x,y,w,h,0,0,w,h);
@@ -60,9 +79,10 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
     }
     function reset(angle=null) {
       animator?.destroy();neutral=angle===null;lastAngle=angle;
-      animator=createFrameAnimator({frameCount:steps,initialFrame:angle===null?0:angle/(Math.PI*2)*steps,
-        circular:true,smoothTime:settings.smoothTime??.14,
-        render:step=>{if(!neutral)draw(mapDirection(step/steps*Math.PI*2,config.directionFrames,config.frameCount,config.phaseSamples));}});
+      animator=createFrameAnimator({frameCount:steps,initialFrame:angle===null?0:toStep(angle),
+        circular:!arc,smoothTime:settings.smoothTime??.14,
+        render:step=>{if(!neutral)draw(config.preview?previewFrame(toAngle(step),config.preview):
+          mapDirection(toAngle(step),config.directionFrames,config.frameCount,config.phaseSamples));}});
       if(neutral)ctx.clearRect(0,0,w,h);
     }
     function sync() {
@@ -77,14 +97,17 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
       const dx=event.clientX-(rect.left+config.eye[0]*rect.width),dy=event.clientY-(rect.top+config.eye[1]*rect.height);
       if(inNeutralZone(dx,dy,neutral,settings.neutral)){if(!neutral)reset();return;}
       const angle=pointerAngle(dx,dy,settings.verticalScale??1.15);
+      if(config.preview&&previewFrame(angle,config.preview)===null){if(!neutral)reset();return;}
       if(neutral){reset(angle);return;}
-      if(lastAngle!==null&&Math.abs(angularDistance(angle,lastAngle))<hysteresis)return;
-      lastAngle=angle;animator.setTarget(angle/(Math.PI*2)*steps);
+      const delta=lastAngle===null?Infinity:arc?
+        (previewDegrees(angle,config.preview)-previewDegrees(lastAngle,config.preview))*Math.PI/180:angularDistance(angle,lastAngle);
+      if(Math.abs(delta)<hysteresis)return;
+      lastAngle=angle;animator.setTarget(toStep(angle));
     },{signal,passive:true});
     document.documentElement.addEventListener('pointerleave',()=>reset(),{signal});
     sync();
     cleanups.push(()=>{observer.disconnect();animator?.destroy();canvas.remove();});
-    emit(subject.id,diagnosticPreview?'diagnostic-preview':'ready');
+    emit(subject.id,config.preview?`experimental-${config.preview.mode}`:diagnosticPreview?'diagnostic-preview':'ready');
   }
   function configure() {
     generation++;pending.forEach(item=>item.abort());pending=[];

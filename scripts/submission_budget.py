@@ -57,7 +57,11 @@ def check_limits(data, body):
     if (per > 5 or total > data['maxSubmissions'] * 5 or models != ['minimax/minimax-h3-max']
             or resolutions != ['768p']) and not str(limits.get('changeReason','')).strip():
         raise ValueError('expanded cost limits require an explicit changeReason backed by user scope')
-    return dict(requestedSeconds=seconds, model=body['model'], resolution=body['resolution'])
+    references = [v for v in body.get('content',[]) if v.get('role') in ('reference_video','reference_audio')]
+    if references and (limits.get('allowReferenceMedia') is not True or not str(limits.get('changeReason','')).strip()):
+        raise ValueError('reference video/audio can incur input costs; record limits.allowReferenceMedia and changeReason within user scope')
+    return dict(requestedSeconds=seconds, model=body['model'], resolution=body['resolution'],
+                referenceMediaCount=len(references))
 
 
 def check_stage(context, base_dir, attempts, body=None, budget_dir=None):
@@ -93,11 +97,37 @@ def check_stage(context, base_dir, attempts, body=None, budget_dir=None):
         evidence = (base_dir / context['defectEvidence']).resolve()
         if not source.is_file() or not evidence.is_file() or not evidence.stat().st_size:
             raise ValueError('repair needs an existing sourceVideo and nonempty defectEvidence')
-        verify_repair_inputs(source, context, body)
+        policy = context.get('inputPolicy','source-frames')
+        if policy == 'source-frames':
+            verify_repair_inputs(source, context, body)
+        elif policy == 'reviewed-replacement':
+            # Reusing a failed frame is not mandatory when it carries the defect.
+            from generation_controls import validate_review
+            if not str(context.get('changeReason','')).strip() or not context.get('inputReview'):
+                raise ValueError('replacement repair needs changeReason and request-bound inputReview')
+            validate_review(base_dir/context['inputReview'], body)
+            from validate_head_manifest import source_frame_count
+            source_frame_count(str(source), hashlib.sha256(source.read_bytes()).hexdigest())
+        else:
+            raise ValueError('repair inputPolicy must be source-frames or reviewed-replacement')
         return dict(stage=stage, sourceSha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-                    defectSha256=hashlib.sha256(evidence.read_bytes()).hexdigest())
+                    defectSha256=hashlib.sha256(evidence.read_bytes()).hexdigest(), inputPolicy=policy)
+    elif stage == 'segment':
+        # A subsequent arc is not an expansion to another subject; it can precede full-loop approval.
+        from generation_controls import validate_review
+        source = (base_dir/context['previousVideo']).resolve()
+        if not source.is_file() or not context.get('inputReview'):
+            raise ValueError('segment needs previousVideo and a request-bound inputReview')
+        validate_review(base_dir/context['inputReview'],body)
+        first = [v for v in body.get('content',[]) if v.get('role')=='first_frame']
+        if len(first)!=1 or not any(v.get('role')=='last_frame' for v in body.get('content',[])):
+            raise ValueError('segment requires first and last frames')
+        verify_repair_inputs(source, {'sourceInputs':[dict(role='first_frame',frame=context.get('previousFrame'))]},
+                             {'content':first})
+        return dict(stage=stage, sourceSha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                    previousFrame=context['previousFrame'])
     else:
-        raise ValueError('production.stage must be pilot, repair or expansion')
+        raise ValueError('production.stage must be pilot, repair, segment or expansion')
     return dict(stage=stage)
 
 
@@ -136,6 +166,22 @@ def verify_repair_inputs(source, context, body):
     finally:cap.release()
 
 
+def submission_preflight(data, output_dir, body, context, base_dir, budget_dir):
+    """Shared by dry-run and the locked reservation; has no side effects."""
+    maximum, attempts = data.get('maxSubmissions'), data.get('attempts')
+    if data.get('schemaVersion') != 1 or not isinstance(data.get('purpose'),str) or not data['purpose'].strip():
+        raise ValueError('budget requires schemaVersion: 1 and a non-empty purpose')
+    if type(maximum) is not int or maximum < 1 or not isinstance(attempts,list):
+        raise ValueError('budget requires positive integer maxSubmissions and attempts array')
+    if len(attempts) >= maximum:
+        raise ValueError('submission budget exhausted; polling does not consume another submission')
+    if any((output_dir/name).exists() for name in ('job.json','submission.json','result.mp4')):
+        raise ValueError('output already has a submission or result; resume its job instead')
+    if any(not isinstance(item,dict) or item.get('requestSha256')==request_hash(body) for item in attempts):
+        raise ValueError('duplicate request or invalid attempt record; inspect the existing attempt')
+    return check_limits(data,body), check_stage(context,base_dir,attempts,body,budget_dir)
+
+
 def reserve(budget_path, output_dir, body, context=None, base_dir=None):
     budget_path = budget_path.resolve()
     output_dir = output_dir.resolve()
@@ -146,21 +192,9 @@ def reserve(budget_path, output_dir, body, context=None, base_dir=None):
         raise ValueError('budget is locked; inspect an interrupted or concurrent submission before recovery')
     try:
         data = json.loads(budget_path.read_text(encoding='utf-8'))
-        maximum = data.get('maxSubmissions')
         attempts = data.get('attempts')
-        if data.get('schemaVersion') != 1 or not isinstance(data.get('purpose'), str) or not data['purpose'].strip():
-            raise ValueError('budget requires schemaVersion: 1 and a non-empty purpose')
-        if type(maximum) is not int or maximum < 1 or not isinstance(attempts, list):
-            raise ValueError('budget requires positive integer maxSubmissions and attempts array')
-        if len(attempts) >= maximum:
-            raise ValueError('submission budget exhausted; polling does not consume another submission')
-        if any((output_dir / name).exists() for name in ('job.json', 'submission.json', 'result.mp4')):
-            raise ValueError('output already has a submission or result; resume its job instead')
         digest = request_hash(body)
-        if any(not isinstance(item, dict) or item.get('requestSha256') == digest for item in attempts):
-            raise ValueError('duplicate request or invalid attempt record; inspect the existing attempt')
-        cost = check_limits(data, body)
-        stage = check_stage(context, base_dir or budget_path.parent, attempts, body, budget_path.parent)
+        cost,stage = submission_preflight(data,output_dir,body,context,base_dir or budget_path.parent,budget_path.parent)
         record = dict(requestSha256=digest, state='reserved', createdAt=datetime.now(timezone.utc).isoformat(), **cost, **stage)
         # Exclusive marker also prevents two different budgets targeting the same output.
         with (output_dir / 'submission.json').open('x', encoding='utf-8') as stream:

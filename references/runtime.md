@@ -1,6 +1,6 @@
 # 网页接入
 
-复制 assets 下 head-follow.mjs、pointer-direction.mjs、frame-animator.mjs、quality-gate.mjs 到项目同一目录。通过 HTTP 提供 .mjs 的 JavaScript MIME；不要用 file:// 打开。
+复制 assets 下 head-follow.mjs、pointer-direction.mjs、frame-animator.mjs、quality-gate.mjs、candidate-preview.mjs 到项目同一目录。通过 HTTP 提供 .mjs 的 JavaScript MIME；不要用 file:// 打开。
 
 ```html
 <div id="scene" style="position:relative;width:min(100%,1000px)">
@@ -25,7 +25,7 @@ scene 必须贴合实际图片区域，不要给它额外 padding 或 object-fit
 
 分层场景的 baseImage 是同一批素材实际合成的静态图，不是另外生成的概念图。cleanPlate 删除当前运动角色、保留其它静态层。角色层、回位图和透明帧使用同一场景坐标；先核对静态/首帧差异，再挂 pointer。独立角色页通过后须在用户要求的目标背景和布局中复查。
 
-当前局部 canvas 先画完整 cleanPlate 区域，故多角色绘制矩形重叠会互相覆盖，静态前景也可能被后画角色遮住。--compare 拒绝矩形重叠；不能为了通过而裁掉头部运动余量。需要前景遮挡或动态角色重叠时，改用统一按层顺序绘制的 scene renderer 并单独验证；现有四模块不自动提供这项能力。
+当前局部 canvas 先画完整 cleanPlate 区域，故多角色绘制矩形重叠会互相覆盖，静态前景也可能被后画角色遮住。--compare 拒绝矩形重叠；不能为了通过而裁掉头部运动余量。需要前景遮挡或动态角色重叠时，改用统一按层顺序绘制的 scene renderer 并单独验证；现有运行时不自动提供这项能力。
 
 每个主体 manifest 的 runtime 可配置：
 ```json
@@ -39,7 +39,7 @@ scene 必须贴合实际图片区域，不要给它额外 padding 或 object-fit
 
 neutral 数值为 CSS 像素，按实际显示大小选择；这是已知案例的默认值，不是人体比例标准。top 以上不触发中性区，防止扫过额头时点头。距离不改变视频姿态幅度。
 
-运行时平滑 3600 步几何角度，再查方向图集；不直接平滑非均匀帧编号。两端跨过正上方走最短角度。每帧只绘制一张真实姿态，不做脸部叠化。
+标准方向运行时平滑 3600 步几何角度，再查方向图集；不直接平滑非均匀帧编号。两端跨过正上方走最短角度。每帧只绘制一张实际取样姿态，不做脸部叠化；是否含插帧由帧来源记录说明。
 
 默认不丢弃小角度输入，由 smoothTime 平滑。旧版本默认 3° 死区会使慢速移动积累到阈值才更新，产生粘滞；旧清单显式填写 3 时也应核对是否需要保留。该修复只解决输入延迟，不修复源素材的停留或首尾姿态跳变。
 
@@ -52,9 +52,23 @@ ready 返回各主体状态；一个主体失败不阻断其他主体。可用 e
 
 默认只挂载经过 audit_head_atlas.py --approve 的图集，并用 Web Crypto 验证报告、底图、图集及 cleanPlate 的 SHA-256。需要 localhost 或 HTTPS；无 Web Crypto 时保留静态页并报告不可用。--require-ready 还核验证据文件和源素材。改变帧、背景、索引或 runtime 设置后需要重新检查。
 
-旧版清单也不会静默放行。独立诊断页可显式传 diagnosticPreview:true，状态为 diagnostic-preview，可用于检查未通过素材，不能当正式 ready。诊断也需要结构合法。它是首轮完整方向候选的正式交付物之一，可以保留明确披露的视觉缺陷，但不是正式 ready；不得伪造通过记录。按 [iteration-delivery.md](iteration-delivery.md) 区分完整候选、有限方向和合成播放。
+旧版清单也不会静默放行。独立诊断页可显式传 diagnosticPreview:true，状态为 diagnostic-preview，可用于检查未通过素材，不能当正式 ready。诊断也需要结构合法。它是首轮完整方向候选的交付物之一，可以保留明确披露的视觉缺陷，但不是正式 ready；不得伪造通过记录。按 [iteration-delivery.md](iteration-delivery.md) 区分完整候选、有限方向、动作相位和合成播放。
 
 可选 phaseSamples 是 [atlasFrame, observedDegrees] 的实测稠密相位，按其映射方向以减少停段；不能用均分时间伪造。无此字段仍按八个实测锚点映射。
+
+## 实验候选：有限方向与动作相位
+
+沿用编译 spec 的真实视频、场景、crop、renderSize、背景处理与 sourceRange；删除 mainAnchors、upperVideo、phaseSamples，新增 preview。下面只是假设裁取 120 帧的配置示例，实际末帧随素材改变：
+
+```json
+{"sourceRange":[0,120],"preview":{"mode":"phase","samples":[[0,0],[360,119]],"notes":"鼠标控制动作进度；方向与眼神未通过完整验收，首尾可能跳变。"}}
+```
+
+samples 的格式为 `[鼠标角度, 图集帧号]`，与标准 phaseSamples 的顺序不同。角度与帧号均严格递增。phase 必须覆盖 0–360；arc 只覆盖小于一圈的实测有效区间，例如 `[315,0]` 到 `[405,119]` 表示左上经正上到右上。正上为 0°，顺时针为正。arc 不能拿任意时间段直接标成方向，phase 不声称方向正确。
+
+编译候选到独立 outputDir，不覆盖已有清单。编译器保留逐帧来源，生成底图、图集与 cleanPlate 哈希；先运行 validate_head_manifest.py 做结构检查，可用 review_head_atlas.py 导出全帧对照，arc 导出区间内往返而不连接首尾。候选不能使用 --require-ready 或 audit_head_atlas.py --approve。现有 repair_head_atlas.py 的索引修复只支持标准方向环；实验候选先在源素材层修复，再重新编译与核对 samples，不手工修改图集后沿用旧哈希。
+
+挂载时显式传 `experimentalPreview:true`，状态仅为 `experimental-arc` 或 `experimental-phase`；未启用、资源哈希变化或 reduced motion 时显示静态底图。页面自行展示 preview.notes 和静态对比，不把内部状态直接当用户文案。arc 区间外清层回静态；phase 跨 0° 可能首尾跳变，平滑不能修复缺失动作。保留停止与卸载逻辑，实验入口不能自动变成正式已验收入口。
 
 ## 中性姿态过渡限制
 

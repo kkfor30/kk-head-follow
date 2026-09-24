@@ -1,8 +1,7 @@
 {
   "model": "minimax/minimax-h3-max",
-  "prompt": "Use the supplied image for the same subject, expression, mouth state, appearance and framing. Starting in the actual upward-looking pose, continuously follow an unseen target above the camera, toward screen-right, below the camera, toward screen-left, and back above the camera. Turn the face with the horizontal movement and lift or lower the chin with the vertical movement; the eyes follow the same target. Preserve the input appearance and keep the face readable. Use the subject-appropriate range established by the inspected input. Keep the torso, camera and framing stable. Complete one continuous trajectory, without a neutral introduction, repeated side-to-side glances or an unrelated movement. Match the supplied upward final pose.",
-  "first_frame": "assets/up-seam.png",
-  "loop_frame": true,
+  "prompt": "Use the supplied first and last images for the same subject and framing. Starting at the screen-right pose, make one continuous sweep through lower-right, down and lower-left to the screen-left final pose. Both eyes follow the same direction as the face. Keep the demonstrated subject-appropriate range, original expression, stable torso and camera. Do not take the upper route, reverse direction, or return to neutral.",
+  "first_frame": "assets/right.png",
   "resolution": "768p",
   "ratio": "1:1",
   "duration": 5,
@@ -10,13 +9,13 @@
   "generate_audio": false,
   "return_last_frame": true,
   "motionPlan": {
-    "kind": "closed-orbit",
-    "coordinateSystem": "screen",
-    "path": "clockwise",
-    "seamDirection": "up",
-    "seamPoseVerified": true,
+    "kind": "segment",
+    "startDirection": "right",
+    "endDirection": "left",
+    "via": "lower-right, down, lower-left",
+    "assembly": "First lower arc; review before preparing the remaining upper arc and joining both endpoints",
     "evidence": "input-review.json",
-    "durationReason": "Example parameter only: select a supported duration after assessing motion range; this is not a validated recipe.",
+    "durationReason": "首段小样，后续段另按已有预算规划",
     "requirements": {
       "identity": {
         "expected": "保留原始身份、表情、嘴部状态与配饰",
@@ -27,7 +26,7 @@
         "verify": "与原始身份基准对照全片，不能只比较首尾"
       },
       "motion": {
-        "expected": "上、右、下、左、上的完整连续屏幕方向环",
+        "expected": "右经下方到左的单段，不能声称完整方向环",
         "controls": [
           "prompt"
         ],
@@ -58,7 +57,7 @@
         "verify": "对照身体锚点与真实场景合成，检查颈部接缝"
       },
       "loop": {
-        "expected": "首尾姿态和接缝前后运动趋势连续",
+        "expected": "本段不闭环；拼装后核对每个接点",
         "controls": [
           "first_frame",
           "last_frame",
@@ -77,5 +76,6 @@
   },
   "extra": {
     "prompt_expansion_mode": "disabled"
-  }
+  },
+  "last_frame": "assets/left.png"
 }

@@ -2,6 +2,8 @@
 
 所有素材路径相对 `--root PROJECT`；manifest 单独指定。`--output` 必须是尚不存在的独立目录。原件不修改。每次只修明确问题，避免同时改多项而无法定位副作用。
 
+本文 repair_head_atlas.py 面向标准方向环。实验 phase/arc 的索引与覆盖语义不同，先在源素材层处理后重新编译，重新核对 preview.samples；脚本会拒绝把候选当完整方向环修复。
+
 ## 遮罩
 
 `staticMask` 与 `motionUnion` 为 atlas cell 同尺寸二值 PNG（0 / 255）。staticMask 标记全片始终静止的背景；motionUnion 覆盖底图旧头、全片新头、耳朵/发丝/胡须及颈部运动。两者至少留 2 像素隔离，Agent 必须查看全帧核对。程序只能校验尺寸、相交与采样面积，不能识别人或动物，不能拿移动耳朵当背景色差。
