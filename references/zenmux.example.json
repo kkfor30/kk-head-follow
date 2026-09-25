@@ -1,6 +1,5 @@
 {
   "model": "minimax/minimax-h3-max",
-  "prompt": "Use the supplied image for the same subject, expression, mouth state, appearance and framing. Starting in the actual upward-looking pose, continuously follow an unseen target above the camera, toward screen-right, below the camera, toward screen-left, and back above the camera. Turn the face with the horizontal movement and lift or lower the chin with the vertical movement; the eyes follow the same target. Preserve the input appearance and keep the face readable. Use the subject-appropriate range established by the inspected input. Keep the torso, camera and framing stable. Complete one continuous trajectory, without a neutral introduction, repeated side-to-side glances or an unrelated movement. Match the supplied upward final pose.",
   "first_frame": "assets/up-seam.png",
   "loop_frame": true,
   "resolution": "768p",
@@ -10,6 +9,9 @@
   "generate_audio": false,
   "return_last_frame": true,
   "motionPlan": {
+    "subjects": [
+      "primary-character"
+    ],
     "kind": "closed-orbit",
     "coordinateSystem": "screen",
     "path": "clockwise",
@@ -19,10 +21,11 @@
     "durationReason": "Example parameter only: select a supported duration after assessing motion range; this is not a validated recipe.",
     "requirements": {
       "identity": {
-        "expected": "保留原始身份、表情、嘴部状态与配饰",
+        "expected": "Preserve the identity, original expression, mouth state, clothing and accessories of the supplied character",
         "controls": [
           "first_frame",
-          "last_frame"
+          "last_frame",
+          "prompt"
         ],
         "verify": "与原始身份基准对照全片，不能只比较首尾"
       },
@@ -34,7 +37,7 @@
         "verify": "逐段核对实际转脸与抬低头，不能用侧倾替代缺失方向"
       },
       "range": {
-        "expected": "按实际主体和用途确定幅度，不能只由极端接缝图决定",
+        "expected": "Make the horizontal change in nose and cheek direction readable while keeping the relevant facial features visible. Raise and lower the chin enough to distinguish upper and lower gaze without hiding the visible eyes",
         "controls": [
           "first_frame",
           "prompt"
@@ -42,14 +45,14 @@
         "verify": "输入检查记录具体幅度意图，成片核对全部极值"
       },
       "gaze": {
-        "expected": "可见眼睛与脸协同追踪目标，遮挡处记未知",
+        "expected": "The visible eyes follow the same unseen target as the face; horizontal and vertical gaze change with that target rather than remaining fixed on the camera",
         "controls": [
           "prompt"
         ],
         "verify": "放大检查上下左右及中间段；未知不写通过"
       },
       "fixedParts": {
-        "expected": "固定身体与构图，页面背景沿用原场景",
+        "expected": "Keep the torso, shoulder placement, camera, framing and scene lighting stable while allowing the neck to articulate naturally at its body connection",
         "controls": [
           "first_frame",
           "prompt",
@@ -72,6 +75,17 @@
           "runtime"
         ],
         "verify": "交付时说明切换限制，由用户验收实际体验"
+      }
+    },
+    "promptSpec": {
+      "subjectDescription": "the primary character in the supplied image",
+      "startPose": "The actual upward-looking pose in the supplied first image",
+      "endPose": "The same upward-looking pose and expression as the supplied last image",
+      "allowedMotion": "Turn the head horizontally and lift or lower the chin to follow one unseen target, with visible eyes directed toward that same target",
+      "framing": "Keep the complete head, hair or ears, neck and stable shoulder context inside the image throughout the turn",
+      "background": {
+        "mode": "scene-preserve",
+        "description": "Keep the actual supplied backdrop and lighting stable; no change of scene"
       }
     }
   },

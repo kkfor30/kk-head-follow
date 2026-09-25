@@ -219,7 +219,7 @@ class PlanTests(unittest.TestCase):
             root=Path(td);Image.new('RGB',(16,16)).save(root/'up.png')
             (root/'input-review.md').write_text('Test pose evidence')
             s=dict(prompt='Continuous clockwise gaze orbit',first_frame='up.png',loop_frame=True,duration=5,
-                   motionPlan=dict(kind='closed-orbit',coordinateSystem='screen',path='clockwise',seamDirection='up',
+                   motionPlan=dict(subjects=['fixture-subject'],kind='closed-orbit',coordinateSystem='screen',path='clockwise',seamDirection='up',
                                    seamPoseVerified=True,evidence='input-review.md',durationReason='Existing supported pilot setting'))
             validate_plan(s,build_content(s,root),root)
             for change in [dict(loop_frame=False),dict(duration=None),dict(motionPlan=None)]:

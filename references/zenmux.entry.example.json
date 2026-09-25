@@ -1,6 +1,7 @@
 {
   "model": "minimax/minimax-h3-max",
-  "first_frame": "assets/right.png",
+  "first_frame": "assets/neutral.png",
+  "loop_frame": true,
   "resolution": "768p",
   "ratio": "1:1",
   "duration": 5,
@@ -8,13 +9,14 @@
   "generate_audio": false,
   "return_last_frame": true,
   "motionPlan": {
-    "kind": "segment",
-    "startDirection": "right",
-    "endDirection": "left",
-    "via": "lower-right, down, lower-left",
-    "assembly": "First lower arc; review before preparing the remaining upper arc and joining both endpoints",
+    "subjects": [
+      "primary-character"
+    ],
+    "kind": "entry-orbit",
+    "coordinateSystem": "screen",
+    "path": "clockwise",
     "evidence": "input-review.json",
-    "durationReason": "首段小样，后续段另按已有预算规划",
+    "durationReason": "Assess whether the entry, full cycle and exit fit this pilot duration; use only the duration already authorized",
     "requirements": {
       "identity": {
         "expected": "Preserve the identity, original expression, mouth state, clothing and accessories of the supplied character",
@@ -26,7 +28,7 @@
         "verify": "与原始身份基准对照全片，不能只比较首尾"
       },
       "motion": {
-        "expected": "右经下方到左的单段，不能声称完整方向环",
+        "expected": "From the actual neutral pose enter UP, then complete UP, upper-right, right, lower-right, down, lower-left, left, upper-left, UP before returning to neutral",
         "controls": [
           "prompt"
         ],
@@ -57,7 +59,7 @@
         "verify": "对照身体锚点与真实场景合成，检查颈部接缝"
       },
       "loop": {
-        "expected": "本段不闭环；拼装后核对每个接点",
+        "expected": "The internal UP-to-UP cycle is continuous; the neutral introduction and return are outside that cycle",
         "controls": [
           "first_frame",
           "last_frame",
@@ -66,30 +68,34 @@
         "verify": "比较首尾两侧多帧姿态、运动方向与停顿"
       },
       "rest": {
-        "expected": "当前采用原静态回退；未实现自然回正",
+        "expected": "The video contains an entry and return for inspection, but the current runtime still uses a static fallback; arbitrary-angle natural rest is not implemented",
         "controls": [
           "runtime"
         ],
         "verify": "交付时说明切换限制，由用户验收实际体验"
       }
     },
-    "subjects": [
-      "primary-character"
-    ],
     "promptSpec": {
       "subjectDescription": "the primary character in the supplied image",
-      "startPose": "The actual screen-right pose in the first image",
-      "endPose": "The actual screen-left pose in the last image",
+      "startPose": "The original neutral pose and gaze in the first image",
+      "endPose": "Return to the same original neutral pose and expression only after the full upward-to-upward cycle",
       "allowedMotion": "Turn the head horizontally and lift or lower the chin to follow one unseen target, with visible eyes directed toward that same target",
       "framing": "Keep the complete head, hair or ears, neck and stable shoulder context inside the image throughout the turn",
       "background": {
         "mode": "scene-preserve",
         "description": "Keep the actual supplied backdrop and lighting stable; no change of scene"
+      },
+      "timing": {
+        "entryEnd": 0.12,
+        "cycleEnd": 0.88
       }
-    }
+    },
+    "firstPose": "neutral",
+    "cycleStart": "up",
+    "cycleEnd": "up",
+    "excludeEntry": true
   },
   "extra": {
     "prompt_expansion_mode": "disabled"
-  },
-  "last_frame": "assets/left.png"
+  }
 }

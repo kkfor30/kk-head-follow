@@ -13,7 +13,7 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
   enabled=()=>true,onState=()=>{},diagnosticPreview=false,experimentalPreview=false}) {
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   const lifetime=new AbortController();
-  let generation=0,disposed=false,cleanups=[],pending=[];
+  let generation=0,disposed=false,suspended=false,cleanups=[],pending=[],verifiedBase=null;
   const status={};
   const emit=(id,state)=>{status[id]=state;onState({...status});};
   async function mount(subject,epoch,signal) {
@@ -32,10 +32,11 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
     if(x<0||y<0||w<=0||h<=0||x+w>sw||y+h>sh||!Array.isArray(config.eye)||config.eye.length!==2
       || !config.eye.every(Number.isFinite)||config.eye[0]*sw<x||config.eye[0]*sw>=x+w
       || config.eye[1]*sh<y||config.eye[1]*sh>=y+h)throw new Error('invalid crop or eye position');
+    let assets=null;
     if(config.preview) {
       if(!experimentalPreview)throw new Error('experimental candidate needs explicit experimentalPreview');
-      await verifyPreviewAssets(config,manifestUrl,rootUrl,signal);
-    } else if(!diagnosticPreview)await verifyQuality(config,manifestUrl,rootUrl,signal);
+      assets=await verifyPreviewAssets(config,manifestUrl,rootUrl,signal);
+    } else if(!diagnosticPreview)assets=await verifyQuality(config,manifestUrl,rootUrl,signal);
     await baseImage.decode();
     if(new URL(config.baseImage,rootUrl).href!==baseImage.src || sw!==baseImage.naturalWidth
       || sh!==baseImage.naturalHeight || (baseImage.dataset.sceneId && config.sceneId!==baseImage.dataset.sceneId))
@@ -44,7 +45,17 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
       || config.directionFrames.some((v,i,a)=>!Number.isInteger(v)||v<0||v>=config.frameCount||(i&&v<=a[i-1]))
       || !validPhases(config.phaseSamples,config.directionFrames,config.frameCount)))
       || config.sheets?.length!==Math.ceil(config.frameCount/config.framesPerSheet))throw new Error('invalid atlas metadata');
-    async function loadImage(url) {const image=new Image();image.src=url;await image.decode();return image;}
+    async function loadImage(url) {
+      const asset=assets?.get(url);
+      if(assets&&!asset)throw new Error('image missing from verified assets');
+      const objectUrl=asset?URL.createObjectURL(new Blob([asset.bytes])):null;
+      try {
+        const image=new Image();image.src=objectUrl||url;await image.decode();return image;
+      } finally {if(objectUrl)URL.revokeObjectURL(objectUrl);}
+    }
+    const baseUrl=new URL(config.baseImage,rootUrl).href;
+    const pinnedBase=assets?await loadImage(baseUrl):null;
+    if(pinnedBase&&(pinnedBase.width!==sw||pinnedBase.height!==sh))throw new Error('verified base dimensions mismatch');
     const sheets=await Promise.all(config.sheets.map(file=>loadImage(new URL(file,manifestUrl).href)));
     for(let i=0;i<sheets.length;i++) {
       const cells=Math.min(config.framesPerSheet,config.frameCount-i*config.framesPerSheet);
@@ -57,6 +68,21 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
     if(disposed||epoch!==generation||signal.aborted)return;
     const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
     if(!ctx)throw new Error('canvas unavailable');
+    if(pinnedBase) {
+      const hash=assets.get(baseUrl).sha256;
+      if(verifiedBase&&verifiedBase.hash!==hash)throw new Error('subjects have different verified base images');
+      if(!verifiedBase) {
+        // Keep the exact verified base visible during neutral and active states.
+        // The caller's img remains in the document to provide layout and alt text.
+        const layer=document.createElement('canvas'),context=layer.getContext('2d');
+        if(!context)throw new Error('base canvas unavailable');
+        layer.setAttribute('aria-hidden','true');layer.dataset.headFollowBase='';
+        layer.width=sw;layer.height=sh;
+        layer.style.cssText='position:absolute;pointer-events:none;left:0;top:0;width:100%;height:100%';
+        context.drawImage(pinnedBase,0,0);baseImage.after(layer);
+        verifiedBase={hash,layer};
+      }
+    }
     canvas.className='head-follow-patch';canvas.dataset.subject=subject.id;
     canvas.setAttribute('aria-hidden','true');canvas.width=w;canvas.height=h;
     canvas.style.cssText=`position:absolute;pointer-events:none;left:${x/sw*100}%;top:${y/sh*100}%;width:${w/sw*100}%;height:${h/sh*100}%;visibility:hidden;mix-blend-mode:normal`;
@@ -112,7 +138,8 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
   function configure() {
     generation++;pending.forEach(item=>item.abort());pending=[];
     cleanups.forEach(fn=>fn());cleanups=[];
-    if(disposed)return Promise.resolve({...status});
+    verifiedBase?.layer.remove();verifiedBase=null;
+    if(disposed||suspended)return Promise.resolve({...status});
     const epoch=generation;
     return Promise.all(subjects.map(subject=>{
       if(reduced.matches){emit(subject.id,'reduced-motion');return;}
@@ -122,10 +149,18 @@ export function mountHeadFollowers({scene,baseImage,subjects,rootUrl=new URL('.'
       });
     })).then(()=>({...status}));
   }
-  reduced.addEventListener('change',configure,{signal:lifetime.signal});
-  const ready=configure();
+  reduced.addEventListener('change',()=>{ready=configure();},{signal:lifetime.signal});
+  let ready=configure();
   function destroy(){if(disposed)return;disposed=true;generation++;lifetime.abort();
-    pending.forEach(item=>item.abort());cleanups.forEach(fn=>fn());pending=[];cleanups=[];}
-  window.addEventListener('pagehide',destroy,{signal:lifetime.signal});
-  return {ready,destroy,getStatus:()=>({...status})};
+    pending.forEach(item=>item.abort());cleanups.forEach(fn=>fn());pending=[];cleanups=[];
+    verifiedBase?.layer.remove();verifiedBase=null;
+    subjects.forEach(subject=>emit(subject.id,'destroyed'));}
+  window.addEventListener('pagehide',event=>{
+    if(!event.persisted){destroy();return;}
+    suspended=true;ready=configure();subjects.forEach(subject=>emit(subject.id,'suspended'));
+  },{signal:lifetime.signal});
+  window.addEventListener('pageshow',event=>{
+    if(event.persisted&&suspended&&!disposed){suspended=false;ready=configure();}
+  },{signal:lifetime.signal});
+  return {get ready(){return ready;},destroy,getStatus:()=>({...status})};
 }

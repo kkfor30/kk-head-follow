@@ -3,13 +3,16 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  test:
+  compatibility:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -17,3 +20,12 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m unittest discover -s scripts -p 'test_*.py'
       - run: node --test tests/*.test.mjs
+  test:
+    if: always()
+    needs: compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all compatibility checks
+        env:
+          RESULT: ${{ needs.compatibility.result }}
+        run: test "$RESULT" = "success"

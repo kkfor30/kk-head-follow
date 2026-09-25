@@ -1,6 +1,6 @@
 {
   "model": "minimax/minimax-h3-max",
-  "first_frame": "assets/right.png",
+  "first_frame": "assets/upper-left.png",
   "resolution": "768p",
   "ratio": "1:1",
   "duration": 5,
@@ -8,13 +8,14 @@
   "generate_audio": false,
   "return_last_frame": true,
   "motionPlan": {
-    "kind": "segment",
-    "startDirection": "right",
-    "endDirection": "left",
-    "via": "lower-right, down, lower-left",
-    "assembly": "First lower arc; review before preparing the remaining upper arc and joining both endpoints",
+    "subjects": [
+      "primary-character"
+    ],
+    "kind": "upper-arc",
+    "coordinateSystem": "screen",
+    "path": "clockwise",
     "evidence": "input-review.json",
-    "durationReason": "首段小样，后续段另按已有预算规划",
+    "durationReason": "Use the shot for one continuous upper sweep rather than another full orbit; endpoint velocity needs inspection",
     "requirements": {
       "identity": {
         "expected": "Preserve the identity, original expression, mouth state, clothing and accessories of the supplied character",
@@ -26,14 +27,14 @@
         "verify": "与原始身份基准对照全片，不能只比较首尾"
       },
       "motion": {
-        "expected": "右经下方到左的单段，不能声称完整方向环",
+        "expected": "A single continuous upper-left through UP to upper-right sweep, maintaining chin elevation while yaw changes; no neutral nod or lower route",
         "controls": [
           "prompt"
         ],
         "verify": "逐段核对实际转脸与抬低头，不能用侧倾替代缺失方向"
       },
       "range": {
-        "expected": "Make the horizontal change in nose and cheek direction readable while keeping the relevant facial features visible. Raise and lower the chin enough to distinguish upper and lower gaze without hiding the visible eyes",
+        "expected": "Use a readable horizontal face turn between the inspected upper-left and upper-right poses. Keep the chin lifted through the midpoint; do not lower it into a neutral or downward pose",
         "controls": [
           "first_frame",
           "prompt"
@@ -41,7 +42,7 @@
         "verify": "输入检查记录具体幅度意图，成片核对全部极值"
       },
       "gaze": {
-        "expected": "The visible eyes follow the same unseen target as the face; horizontal and vertical gaze change with that target rather than remaining fixed on the camera",
+        "expected": "Visible eyes follow one elevated target from screen upper-left through UP to upper-right, remaining elevated rather than glancing back to the camera",
         "controls": [
           "prompt"
         ],
@@ -57,7 +58,7 @@
         "verify": "对照身体锚点与真实场景合成，检查颈部接缝"
       },
       "loop": {
-        "expected": "本段不闭环；拼装后核对每个接点",
+        "expected": "This is an open upper arc, not a closed orbit; endpoints must remain compatible with the reviewed main clip",
         "controls": [
           "first_frame",
           "last_frame",
@@ -73,23 +74,22 @@
         "verify": "交付时说明切换限制，由用户验收实际体验"
       }
     },
-    "subjects": [
-      "primary-character"
-    ],
     "promptSpec": {
       "subjectDescription": "the primary character in the supplied image",
-      "startPose": "The actual screen-right pose in the first image",
-      "endPose": "The actual screen-left pose in the last image",
-      "allowedMotion": "Turn the head horizontally and lift or lower the chin to follow one unseen target, with visible eyes directed toward that same target",
+      "startPose": "The actual upper-left gaze with raised chin in the first image",
+      "endPose": "The actual upper-right gaze with the same lifted-chin intention in the last image",
+      "allowedMotion": "Turn the head horizontally across the upper gaze range while retaining a lifted chin and directing the visible eyes toward the same elevated target",
       "framing": "Keep the complete head, hair or ears, neck and stable shoulder context inside the image throughout the turn",
       "background": {
         "mode": "scene-preserve",
         "description": "Keep the actual supplied backdrop and lighting stable; no change of scene"
       }
-    }
+    },
+    "startDirection": "upper-left",
+    "endDirection": "upper-right"
   },
   "extra": {
     "prompt_expansion_mode": "disabled"
   },
-  "last_frame": "assets/left.png"
+  "last_frame": "assets/upper-right.png"
 }

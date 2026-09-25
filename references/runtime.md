@@ -52,6 +52,10 @@ ready 返回各主体状态；一个主体失败不阻断其他主体。可用 e
 
 默认只挂载经过 audit_head_atlas.py --approve 的图集，并用 Web Crypto 验证报告、底图、图集及 cleanPlate 的 SHA-256。需要 localhost 或 HTTPS；无 Web Crypto 时保留静态页并报告不可用。--require-ready 还核验证据文件和源素材。改变帧、背景、索引或 runtime 设置后需要重新检查。
 
+带 frameLineage 的正式图集还需发布对应来源 JSON，网页端与 Python 使用同一资源清单。已验证字节直接用于图片解码，不再请求一次原图片 URL。挂载期间在原 img 后放置同尺寸静态 canvas，显示已验证底图；原 img 保留布局和替代文本，销毁时移除该层。这样中性态与动态态使用同一版像素。多个主体共享这一底图层。
+
+页面进入后退缓存时暂停并清理绘制层，pageshow 恢复后重新核验、挂载；恢复后可读取最新 follower.ready。显式 destroy() 始终终止生命周期，不因缓存事件重新启动。
+
 旧版清单也不会静默放行。独立诊断页可显式传 diagnosticPreview:true，状态为 diagnostic-preview，可用于检查未通过素材，不能当正式 ready。诊断也需要结构合法。它是首轮完整方向候选的交付物之一，可以保留明确披露的视觉缺陷，但不是正式 ready；不得伪造通过记录。按 [iteration-delivery.md](iteration-delivery.md) 区分完整候选、有限方向、动作相位和合成播放。
 
 可选 phaseSamples 是 [atlasFrame, observedDegrees] 的实测稠密相位，按其映射方向以减少停段；不能用均分时间伪造。无此字段仍按八个实测锚点映射。

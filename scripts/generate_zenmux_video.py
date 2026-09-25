@@ -22,6 +22,7 @@ from PIL import Image
 from zenmux_config import configured_api_key
 from submission_budget import reserve, write_atomic, submission_preflight
 from generation_plan import validate_plan
+from motion_prompt import resolve_prompt, assemble_prompt
 from generation_controls import (request_options, validate_requirements, review_template,
                                  validate_review, provider_observation, archive_inputs, PROFILE_DATE)
 
@@ -94,18 +95,7 @@ def infer_ratio(value: str | None, base_dir: Path) -> str:
 
 def build_content(spec: dict[str, Any], base_dir: Path) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = []
-    prompt = spec.get("prompt")
-    if spec.get("prompt_file"):
-        prompt_path = Path(str(spec["prompt_file"]))
-        if not prompt_path.is_absolute():
-            prompt_path = (base_dir / prompt_path).resolve()
-        try:
-            prompt = prompt_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            fail(f"prompt file not found: {prompt_path}")
-    if not isinstance(prompt, str) or not prompt.strip():
-        fail("provide a non-empty spec.prompt or spec.prompt_file")
-    prompt = prompt.strip()
+    prompt, _ = resolve_prompt(spec, base_dir)
     prompt_length = len(prompt)
     if prompt_length > MAX_PROMPT_CHARACTERS:
         fail(
@@ -248,6 +238,7 @@ def prepare_request(spec, base_dir, require_review=True):
     if any(i.get('role') in ('first_frame','last_frame') for i in content):
         warnings.append('image-to-video uses image aspect ratio; requested ratio is not an image resize operation')
     return body, checked_plan, dict(profileDate=PROFILE_DATE, provider='zenmux', inputReview=review,
+        promptAssembly=assemble_prompt(spec)[1] if 'promptSpec' in spec['motionPlan'] else dict(mode='manual', semanticAgreement='requires-input-review'),
         requestedExpansion=body.get('extra',{}).get('prompt_expansion_mode','not-profiled'),
         effectivePrompt='unknown-until-provider-returns-it', warnings=warnings,
         liveAdapterValidation='not-proven-by-offline-checks')

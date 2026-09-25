@@ -29,12 +29,15 @@ export async function verifyPreviewAssets(config,manifestUrl,rootUrl,signal) {
   const entries=[[new URL(config.baseImage,rootUrl),config.baseImageSha256],
     ...config.sheets.map(p=>[new URL(p,manifestUrl),config.sheetHashes?.[p]])];
   if(config.cleanPlate)entries.push([new URL(config.cleanPlate.path,rootUrl),config.cleanPlate.sha256]);
-  await Promise.all(entries.map(async([url,expected])=>{
+  const assets=await Promise.all(entries.map(async([url,expected])=>{
     if(!/^[a-f0-9]{64}$/i.test(expected||''))throw new Error('missing candidate asset hash');
     const response=await fetch(url,{signal,cache:'no-cache'});
     if(!response.ok)throw new Error('candidate asset unavailable');
-    const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await response.arrayBuffer())),
+    const bytes=await response.arrayBuffer();
+    const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),
       b=>b.toString(16).padStart(2,'0')).join('');
     if(hash!==expected.toLowerCase())throw new Error('candidate asset changed');
+    return [url.href,{bytes,sha256:hash}];
   }));
+  return new Map(assets);
 }
