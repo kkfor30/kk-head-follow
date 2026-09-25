@@ -21,9 +21,17 @@ disabled 是精确动作对照的起点，未证明普遍更好。旧 spec.extra
 
 首尾模式实际比例由图决定；ratio 不是裁图操作。参考模式显式选输出比例。新输入必须本地可查看并按实际字节绑定；远程媒体先下载。预检：图片256–5760像素、比例0.4–2.5、每图≤30MB；参考图≤9、视频≤3、音频≤3，总数≤12；视频H.264/HEVC、23.976–60fps、每段2–15秒；同类视频/音频总长≤15秒，视频≤50MB、音频≤15MB；编码请求≤64MB。探测需ffprobe，不为通过检查静默改素材。
 
+预检同时核对真实格式与 MIME：图片 JPEG/PNG/WEBP，或当前 Pillow 可解码的 HEIC/HEIF；视频 MP4/MOV，音轨若存在须为 AAC/MP3；音频 WAV/MP3。GIF、BMP、MKV、FLAC 等不因本地能解码就允许提交。格式不符时在占预算前报错，需要转换则另存副本并重新建立输入观察。
+
 ## 新请求流程
 
-复制 zenmux.example.json / zenmux.reference.example.json / zenmux.segment.example.json 到项目，填写实际目标与文件。媒体/证据路径相对 spec。结构示例没有附带已通过的输入观察。
+复制 zenmux.example.json / zenmux.entry.example.json / zenmux.upper.example.json / zenmux.reference.example.json / zenmux.segment.example.json 中适合的路线到项目，填写实际目标与文件。媒体/证据路径相对 spec。示例没有附带已通过的输入观察。
+
+默认使用 motionPlan.promptSpec；按 [prompt-patterns.md](prompt-patterns.md) 先导出完整文本：
+```text
+python scripts/build_motion_prompt.py PROJECT/source/request.json --output PROJECT/build/prompt-review
+```
+生成请求实时使用同一组装器，不需要把导出的文本再粘贴回 spec。修改规格会改变请求及输入观察绑定；不要把旧观察复制成通过。手写 prompt/prompt_file 仍可使用，不能同时提供 promptSpec。
 
 创建未审查模板，identity 指原始身份基准：
 ```powershell

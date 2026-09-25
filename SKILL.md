@@ -5,23 +5,29 @@ description: 制作人物、动物或角色的网页头部与视线跟随；按�
 
 # KK Head Follow
 
-版本：`0.2.0-experimental.1`（2026-09-24）。开始前读 [版本范围与示例](references/frozen-scope.md)。本次生成控制与候选接入经离线工程验证；新路线和提示词尚无跨素材生成成功率证据。
+版本：`0.3.0`（2026-09-26）。范围与证据见 [版本范围与示例](references/frozen-scope.md)。本版把动作规格接入实际提示词，增加场景选路和批处理前的代表帧合成；尚无新增跨素材生成成功率证据。
 
 让头部与眼神在前方视线范围内跟随鼠标，保留原身份、表情、嘴部状态、身体和布局。按实际主体与目标确定幅度、可见性和允许侧倾，不把某个人物或动物的姿态写成通用标准。正式方向环指上→右→下→左→上的连续姿态，经过中间方向；使用真实存在的动作，不靠假锚点填缺口。眼睛动作烘焙在视频中，不承诺独立眼球或按距离改变幅度。
 
 ## 首轮目标与迭代
 
-先读 [iteration-delivery.md](references/iteration-delivery.md)。默认一次5秒/768p小样，按动作与已有预算调整，不把5秒当最佳时长。先核验母版，再有限程序处理，在真实页面尽早交付有缺陷说明的候选。完整方向、有限方向、实验相位与播放诊断分开，实验候选不写 ready。已有交互实现请求包含独立候选入口的接入，不需用户再说“硬接”；默认首页启用遵循用户要求。所有生成沿用累计预算，不自动追加付费重试。
+先按 [feasibility.md](references/feasibility.md) 判断素材能否承担用户目标。方向跟随默认要求鼠标方向对应真实姿态；phase 不能算目标已完成。先检查母版缺口，再做代表帧场景合成，最后批处理图集和精修。已有同身份、同场景可用图集时直接复用。精确独立眼球、任意幅度或自然回正需要额外控制能力，不通过视频相位映射承诺实现。
+
+涉及看镜头的原图、准确注视、表情兼容或自然进出时读 [gaze-and-rest.md](references/gaze-and-rest.md)。中性表情、头部方向、眼神方向和回正路径分别核验。当前方位角播放器在同方向近/远位置取同一姿态，不把完整环描述为二维精确注视。
+
+先读 [iteration-delivery.md](references/iteration-delivery.md)。默认一次5秒/768p可行性小样；完整环先按 [动作负荷与时长](references/generation-planning.md#按动作负荷选择时长) 分配进入、有效环和退出时间，按已有授权配置预算，不机械套用5秒。先核验母版，再有限程序处理，在真实页面尽早交付有缺陷说明的候选。完整方向、有限方向、实验相位与播放诊断分开，实验候选不写 ready。已有交互实现请求包含独立候选入口的接入，不需用户再说“硬接”；默认首页启用遵循用户要求。所有生成沿用累计预算，不自动追加付费重试。
 
 ## 生成前控制
 
 需要新素材时先读 [generation-planning.md](references/generation-planning.md)，根据要求选择首尾帧、动作参考或必要的分段。首尾控制端点，示范帮助约束动作，提示词描述变化，固定背景与鼠标时序交给程序。相同首尾不约束整条路线，不能靠增加禁止句保证方向完整。
 
-在 motionPlan.requirements 记录可观察目标、实际控制来源和核对方法，据同一规格写 prompt 并验收。先检查输入身份、姿态、幅度、特征可见性、构图、固定项与图文一致性；失败帧仅因方向正确也不能直接作为新身份基准。使用请求绑定的观察模板，Agent 填写实际结论，unknown 不伪装通过。模板是记录工具，不要求用户重复批准。
+在 motionPlan.requirements 记录可观察目标、实际控制来源和核对方法。默认按 [prompt-patterns.md](references/prompt-patterns.md) 填 promptSpec，由 `build_motion_prompt.py` 导出实际提交文本；生成入口使用同一组装器。保留手写 prompt 入口，不能与结构化入口混用。脚本不理解全部语义，仍要检查图文、头眼协调和首尾一致性；失败帧仅因方向正确也不能成为新身份基准。观察模板由 Agent 填实际结论，unknown 不伪装通过，不要求用户重复批准。
+
+一条生成请求只驱动一个角色：motionPlan.subjects 只填一个主体，subjectIsolation 核对动作范围、清晰度和运动余量。默认用保留完整头颈的近景；允许静止邻居或完整场景提供必要上下文，但不能同时承担第二个角色的动作任务。仅写“狗不动”不能证明目标清晰、余量足够。先完成一个角色的小样，再使用剩余已授权预算扩展其他角色。
 
 ## 输入与合成
 
-已有网页或已验收素材时优先复用。先读 [subject-production.md](references/subject-production.md) 确定交付场景：新建首屏默认按“构图参考 → 无角色背景与透明角色 → 目标首屏静态合成 → 单主体动作小样 → 原场景接入”推进。独立纯色测试只能核验动作，不能替代用户要求的复杂首屏。静态与交互使用同一套分层素材、位置和缩放；用户要求保留完整旧照片时属于进阶局部替换，不擅自重设计。生成脚本的 production 阶段绑定实际 pilot 来源与检查结果。每个主体独立标定，Skill 不依赖私人路径、角色或历史会话。
+已有网页或已验收素材时优先复用。按 [scene-routing.md](references/scene-routing.md) 选择简单浅/深背景、复杂背景、分层新场景或前景遮挡路线，再按需要读 [subject-production.md](references/subject-production.md)。静态与交互使用同一套素材、位置和缩放；保留旧照片时不擅自重设计。独立纯色测试不能替代目标首屏。每个主体独立标定，生成 production 阶段绑定实际 pilot 来源，Skill 不依赖私人路径或历史会话。
 
 读 [background-delivery.md](references/background-delivery.md) 选择固定场景补丁，或逐帧 Alpha 与去除旧头的干净底图。视频背景不自动等于原图背景；羽化不能修复矩形内部的色差或纹理变化。输入保留完整头颈和运动余量，生成输入与最终绘制区分开并保持比例。
 
@@ -30,8 +36,8 @@ description: 制作人物、动物或角色的网页头部与视线跟随；按�
 ## 制作、修复与检查
 
 0. 新建分层首屏先按 [layered-scene.md](references/layered-scene.md) 合成静态图与各主体 cleanPlate，记录角色、阴影、位置和尺寸。可用 `compose_layered_scene.py` 避免手工重复对齐。先检查实际首屏构图、落地感和邻近遮挡；已有用户验收可直接复用。检查通过只证明静态融合；同一角色的抬头参考若重新生成，也需重新核对外观和比例。
-1. 记录底图、ROI、视频与工作坐标、眼睛位置，读 [asset-contract.md](references/asset-contract.md)。运行 `segment_head_motion.py --video ... --crop x y w h --output ... --keep-samples`。crop 是视频坐标。查看源样本，标出进入/退出、停留、反向和缺失方向；不按时长均分，不把正视标成上看。像素运动量不判断动作语义。
-2. 读 [motion-quality.md](references/motion-quality.md) 与 [repair-and-review.md](references/repair-and-review.md)。先确认母版动作可用，再裁段、重新标定和处理采样密度；完整连续动作可用 `densify_head_video.py` 生成 2× 候选及逐帧来源，接缝桥接是另一种操作。大段缺失不得改标签掩盖。不因背景问题自动重生成。
+1. 已有视频先走短路径：确认原视频 ROI → 运行 `review_source_video.py --video ... --crop x y w h --output ...` → 看 overview 与相关原生帧，判断是否值得做图集。已有足够观察记录则复用。明显缺方向时先定位缺口；候选可用后再检查全帧页与原像素眼神，需要定位停顿再用 `segment_head_motion.py`。crop 是原视频坐标，不按时长均分方向，不把正视标成上看。开始标定/编译时再读 [asset-contract.md](references/asset-contract.md)，记录底图、工作坐标与眼睛位置。
+2. 母版动作初筛可用后，按 [scene-samples.md](references/scene-samples.md) 用 `review_scene_samples.py` 合成最差边界和极值帧，先核对旧轮廓、颈根、深色亮边、复杂纹理和遮挡，再投入全片处理。按 [repair-recipes.md](references/repair-recipes.md) 定位上弧、眼神、背景或运行时缺陷。完整连续动作采样不足时才比较 `densify_head_video.py` 的 2× 候选；大段缺失不得靠插帧或标签掩盖。详细处理见 [motion-quality.md](references/motion-quality.md) 和 [repair-and-review.md](references/repair-and-review.md)。
 3. `compile_head_atlas.py spec.json --root PROJECT` 编译候选；`validate_head_manifest.py manifest.json --root PROJECT` 校验结构、源文件和坐标。方向不足但可体验时按 [runtime.md](references/runtime.md) 的 preview 编译，不编造八锚点。多主体用 `--compare` 核对共同底图和绘制区。编译成功不等于正式方向通过。
 4. 运行 `inspect_atlas_seams.py manifest.json --output seam-review` 与 `review_head_atlas.py manifest.json --root PROJECT --output review`，输出所有帧、跨源与闭环接点、合成段和双向证据；arc 检查区间内往返，不要求其端点闭环。Agent 主动逐页查看发丝、耳朵、眼镜、颈根、旧头轮廓和背景；不把首次找错交给用户。
 5. 正式方向候选用 `audit_head_atlas.py manifest.json --root PROJECT --write-review-template review/observations.json` 建立当前像素观察表。按实际证据填写方向、眼神、接缝、背景、轮廓、合成帧和交互；未检查保持 unknown。实验 phase/arc 不走 --approve，保留离线证据与局限说明。静态背景遮罩避开新旧头完整运动并集。

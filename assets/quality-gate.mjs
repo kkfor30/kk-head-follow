@@ -25,9 +25,14 @@ export async function verifyQuality(config,manifestUrl,rootUrl,signal) {
     throw new Error('invalid quality report');
   const expected=[['root',config.baseImage],...config.sheets.map(p=>['manifest',p])];
   if(config.cleanPlate)expected.push(['root',config.cleanPlate.path]);
+  if(config.frameLineage)expected.push(['root',config.frameLineage.path]);
   const records=q.binding.assets;
   if(!Array.isArray(records)||records.length!==expected.length||
     expected.some(([scope,path])=>records.filter(r=>r.scope===scope&&r.path===path).length!==1))
     throw new Error('incomplete quality asset binding');
-  await Promise.all(records.map(r=>verified(new URL(r.path,r.scope==='root'?rootUrl:manifestUrl),r.sha256)));
+  const assets=await Promise.all(records.map(async r=>{
+    const url=new URL(r.path,r.scope==='root'?rootUrl:manifestUrl);
+    return [url.href,{bytes:await verified(url,r.sha256),sha256:r.sha256.toLowerCase()}];
+  }));
+  return new Map(assets);
 }

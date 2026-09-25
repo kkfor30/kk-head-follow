@@ -7,6 +7,9 @@ def validate_plan(spec, content, base_dir, require_evidence=True):
     plan=spec.get('motionPlan')
     if not isinstance(plan,dict):
         raise ValueError('motionPlan is required: closed-orbit, entry-orbit, upper-arc, reference-motion, segment or diagnostic')
+    subjects=plan.get('subjects')
+    if not isinstance(subjects,list) or len(subjects)!=1 or not isinstance(subjects[0],str) or not subjects[0].strip():
+        raise ValueError('motionPlan.subjects must name exactly one animated subject; static scene context is allowed')
     kind=plan.get('kind')
     if kind not in {'closed-orbit','entry-orbit','upper-arc','diagnostic','reference-motion','segment'}:
         raise ValueError('unknown motionPlan.kind')

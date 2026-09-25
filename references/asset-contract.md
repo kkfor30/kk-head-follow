@@ -56,6 +56,8 @@ upper[midpoint:] + main[upperRight+1:upperLeft+1] + upper[1:midpoint]
 
 ## 输出与校验
 
+outputDir 必须尚不存在。编译先写入同级临时目录，成功后发布整套图集；失败不覆盖已有候选。新版本编译保留所有原始解码帧序号，变帧率输入不会隐式补出重复帧。VFR 的帧号可用于方向标定，但不能把 fps 字段当作其实际时间轴。
+
 输出 manifest、sheet-N.png、neutral.png；透明模式另有多底色接触表。manifest 保存：
 - schemaVersion、sceneId、baseImage、底图哈希和尺寸；
 - crop、eye、frameCount、columns、framesPerSheet、sheets、directionFrames；

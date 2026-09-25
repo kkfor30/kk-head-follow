@@ -17,7 +17,7 @@ def fixture_spec(root):
     Image.new('RGB', (256,256), 'white').save(root/'input.png')
     return dict(prompt='A fixed subject follows one moving target.',first_frame='input.png',loop_frame=True,
                 duration=5,extra={'prompt_expansion_mode':'disabled'},
-                motionPlan=dict(kind='closed-orbit',coordinateSystem='screen',path='clockwise',
+                motionPlan=dict(subjects=['fixture-subject'],kind='closed-orbit',coordinateSystem='screen',path='clockwise',
                     seamDirection='up',seamPoseVerified=True,evidence='input-review.json',durationReason='Offline fixture',
                     requirements={name:dict(expected='Fixture '+name,controls=['prompt'],verify='Inspect fixture '+name)
                                   for name in REQUIREMENTS}))
@@ -36,6 +36,19 @@ class ControlTests(unittest.TestCase):
     def setUp(self):
         temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name);self.spec=fixture_spec(self.root)
+
+    def test_one_subject_input_is_required_before_submission(self):
+        for subjects in (None, [], ['person', 'dog'], [''], 'person', [True]):
+            spec=copy.deepcopy(self.spec);spec['motionPlan']['subjects']=subjects
+            with self.subTest(subjects=subjects),self.assertRaisesRegex(ValueError,'exactly one animated subject'):
+                prepare_request(spec,self.root,False)
+        _,review=inspected_fixture(self.spec,self.root)
+        path=self.root/'input-review.json'
+        for state in ('limited','not-applicable','unreviewed','fail'):
+            review['checks']['subjectIsolation'].update(status=state,notes='A second character remains in the input.')
+            path.write_text(json.dumps(review),encoding='utf-8')
+            with self.subTest(state=state),self.assertRaisesRegex(ValueError,'subjectIsolation'):
+                prepare_request(self.spec,self.root)
 
     def test_review_binds_prompt_images_plan_and_original_identity(self):
         inspected_fixture(self.spec,self.root)
@@ -154,6 +167,29 @@ class ControlTests(unittest.TestCase):
         review_path.write_text('{}')
         with self.assertRaisesRegex(ValueError,'review changed'):
             archive_inputs(self.root,body,review_path,review_hash)
+
+    def test_unsupported_image_and_mislabeled_bytes_fail_before_review_or_budget(self):
+        for kind in ('gif','bmp'):
+            Image.new('RGB',(256,256),'white').save(self.root/f'input.{kind}')
+            self.spec['first_frame']=f'input.{kind}'
+            with self.assertRaisesRegex(ValueError,'unsupported image format'):
+                inspected_fixture(self.spec,self.root)
+        self.spec['first_frame']='input.png'
+        body=build_content(self.spec,self.root)
+        body[1]['image_url']['url']=body[1]['image_url']['url'].replace('image/png','image/jpeg')
+        with self.assertRaisesRegex(ValueError,'MIME mismatch'):
+            media_inventory(body)
+
+    def test_unsupported_video_container_and_audio_format_are_rejected(self):
+        import base64
+        for kind,mime,fmt,codec,role in [('video_url','video/x-matroska','matroska,webm','h264','reference_video'),
+                                         ('audio_url','audio/flac','flac','flac','reference_audio')]:
+            payload={'type':kind,'role':role,kind:{'url':f'data:{mime};base64,'+base64.b64encode(b'fixture').decode()}}
+            info=dict(format=dict(format_name=fmt,duration='3'),streams=[dict(codec_type='video' if kind=='video_url' else 'audio',
+                            codec_name=codec,avg_frame_rate='24/1',width=256,height=256)])
+            with patch('generation_controls.subprocess.run',return_value=subprocess.CompletedProcess([],0,json.dumps(info))),\
+                 self.assertRaisesRegex(ValueError,'MP4/MOV|WAV/MP3'):
+                media_inventory([payload])
 
 
 if __name__=='__main__':unittest.main()

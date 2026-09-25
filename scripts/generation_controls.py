@@ -17,7 +17,7 @@ PROFILES = {
     'minimax/minimax-h3-max': {'resolutions': ('480p', '768p'), 'duration': (5, 15), 'expansion': True},
     'minimax/minimax-h3': {'resolutions': ('768p', '2K'), 'duration': (4, 15), 'expansion': False},
 }
-CHECKS = ('identity', 'inputPose', 'motionRange', 'featureVisibility', 'framing',
+CHECKS = ('subjectIsolation', 'identity', 'inputPose', 'motionRange', 'featureVisibility', 'framing',
           'fixedParts', 'promptImageAgreement', 'endpointCompatibility', 'motionReference')
 REQUIREMENTS = ('identity', 'motion', 'range', 'gaze', 'fixedParts', 'loop', 'rest')
 
@@ -79,6 +79,7 @@ def media_inventory(content):
             raw = base64.b64decode(uri.split(',', 1)[1], validate=True)
         except Exception as exc:
             raise ValueError('invalid media data URI') from exc
+        mime = uri[5:].split(';', 1)[0].lower()
         size_limit = {'image_url': 30, 'video_url': 50, 'audio_url': 15}[item['type']] * 1024**2
         if len(raw) > size_limit:
             raise ValueError(f'{role} exceeds its per-file size limit')
@@ -86,6 +87,10 @@ def media_inventory(content):
         counts[role] = entry['index'] + 1
         if item['type'] == 'image_url':
             with Image.open(io.BytesIO(raw)) as im:
+                formats = {'JPEG': {'image/jpeg'}, 'PNG': {'image/png'}, 'WEBP': {'image/webp'},
+                           'HEIF': {'image/heif', 'image/heic'}, 'HEIC': {'image/heic', 'image/heif'}}
+                if im.format not in formats or mime not in formats[im.format]:
+                    raise ValueError('unsupported image format or MIME mismatch; use JPEG, PNG, WEBP or a locally decodable HEIC/HEIF')
                 width, height = im.size
                 im.verify()
             entry['size'] = [width, height]
@@ -103,6 +108,15 @@ def media_inventory(content):
                     duration = float(info['format']['duration'])
                 except (OSError, subprocess.SubprocessError, ValueError, KeyError, StopIteration) as exc:
                     raise ValueError(f'cannot probe {role}; install ffprobe and provide decodable media') from exc
+                containers = set(info['format'].get('format_name', '').split(','))
+                if item['type'] == 'video_url':
+                    if not containers.intersection({'mov', 'mp4'}) or mime not in {'video/mp4', 'video/quicktime'}:
+                        raise ValueError('reference video must be MP4/MOV with matching MIME')
+                    if any(s.get('codec_name') not in {'aac', 'mp3'} for s in info['streams'] if s.get('codec_type') == 'audio'):
+                        raise ValueError('reference video audio must use AAC or MP3')
+                elif not ((containers == {'wav'} and mime in {'audio/wav', 'audio/x-wav', 'audio/vnd.wave'})
+                          or (containers == {'mp3'} and mime in {'audio/mpeg', 'audio/mp3'})):
+                    raise ValueError('reference audio must be WAV/MP3 with matching MIME')
                 if not 2 <= duration <= 15:
                     raise ValueError(f'{role} must last 2–15 seconds')
                 seconds[role] += duration
@@ -174,6 +188,8 @@ def validate_review(path, body, plan=None):
         state, notes = check.get('status'), check.get('notes')
         if state not in ('pass', 'limited', 'not-applicable') or not isinstance(notes, str) or not notes.strip():
             raise ValueError(f'input check {name} needs an observation; fail/unreviewed cannot authorize generation')
+        if name == 'subjectIsolation' and state != 'pass':
+            raise ValueError('subjectIsolation must pass: inspect one animated target, clarity and motion room; static context is allowed')
         if state == 'limited':
             limitations.append(dict(check=name, notes=notes))
     return dict(inputReviewSha256=digest(path), limitations=limitations,

@@ -36,7 +36,8 @@ def frames(video: Path, size: tuple[int, int], step: int = 1) -> list[np.ndarray
         )
     with tempfile.TemporaryDirectory() as folder:
         pattern = str(Path(folder) / "%06d.png")
-        subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-vf", f"scale={width}:{height}:flags=lanczos", pattern], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-noautorotate", "-i", str(video), "-map", "0:v:0",
+                        "-vf", f"scale={width}:{height}:flags=lanczos", "-fps_mode", "passthrough", pattern], check=True)
         paths = sorted(Path(folder).glob("*.png"))[::step]
         return [np.asarray(Image.open(path).convert("RGBA")) for path in paths]
 
@@ -105,7 +106,7 @@ def patch_with_background(frame: np.ndarray, base: np.ndarray, mode: str,
         ratio = np.clip((distance - transparent_threshold) / (opaque_threshold - transparent_threshold), 0, 1)
         alpha = (255 * ratio * ratio * (3 - 2 * ratio)).astype(np.uint8)
         selected = key_channels(key)
-        if selected:
+        if selected and len(selected) < 3:
             other = [index for index in range(3) if index not in selected]
             key_strength = np.min(rgb[:, :, selected], axis=2)
             other_strength = np.max(rgb[:, :, other], axis=2)
@@ -140,6 +141,23 @@ def fit_light_background(base: np.ndarray) -> np.ndarray:
     # Even light pixels can contain antialiased hair from the static head.
     # Use the fitted backdrop everywhere; copying those pixels leaves an outline.
     return background
+
+
+def feather_patch(image: Image.Image, spec: dict) -> Image.Image:
+    """Shared by full compilation and representative scene checks."""
+    width, height = image.size
+    fx, fy = spec.get('featherX', 10), spec.get('featherY', 18)
+    edges = spec.get('feather', [fx, fy, fx, fy])
+    if not isinstance(edges, (list, tuple)) or len(edges) != 4 or any(
+            type(v) not in (int, float) or not np.isfinite(v) or v <= 0 for v in edges):
+        raise ValueError('feather widths must be four positive finite numbers')
+    left, top, right, bottom = edges
+    yy, xx = np.mgrid[:height, :width]
+    distance = np.minimum.reduce([xx/left, (width-1-xx)/right, yy/top, (height-1-yy)/bottom])
+    alpha = Image.fromarray(np.clip(distance*255, 0, 255).astype(np.uint8))
+    result = image.copy()
+    result.putalpha(ImageChops.multiply(result.getchannel('A'), alpha))
+    return result
 
 
 def check_anchors(anchors: list[int], count: int, require_zero: bool = False) -> None:
@@ -209,6 +227,23 @@ def make_background_contact_sheet(images: list[Image.Image], anchors: list[int],
 
 
 def build(spec: dict, root: Path) -> None:
+    output = root / spec["outputDir"]
+    if output.exists():
+        raise ValueError('preserve existing output; use a new outputDir')
+    # Write a complete candidate in a sibling staging directory. Failures never
+    # publish half an atlas, and concurrent runs cannot replace a populated one.
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as folder:
+        staged = Path(folder) / 'atlas'
+        _build(spec, root, staged)
+        if output.exists():
+            raise ValueError('output appeared during compilation; use a new outputDir')
+        staged.rename(output)
+
+
+def _build(spec: dict, root: Path, output: Path) -> None:
+    if {'sampleMattes', 'foregroundOverlay'} & set(spec):
+        raise ValueError('sampleMattes/foregroundOverlay are scene-review prototypes, not compiler inputs; prepare full assets and runtime layers first')
     base_path = root / spec["baseImage"]
     base_image = Image.open(base_path).convert("RGB")
     source_width, source_height = spec["sourceSize"]
@@ -337,9 +372,6 @@ def build(spec: dict, root: Path) -> None:
     base_crop = np.asarray(base_image.crop((x, y, x + width, y + height)))
     if background_mode == "fit-edge-light":
         base_crop = fit_light_background(base_crop)
-    output = root / spec["outputDir"]
-    if preview is not None and (output/'manifest.json').exists():
-        raise ValueError('preserve existing candidate; use a new outputDir')
     output.mkdir(parents=True, exist_ok=True)
     selected = []
     for frame in route:
@@ -348,21 +380,7 @@ def build(spec: dict, root: Path) -> None:
                                               transparent_threshold, opaque_threshold))
 
     if background_owner == "scene":
-        alpha = np.zeros((height, width), dtype=np.uint8)
-        feather_x = spec.get("featherX", 10)
-        feather_y = spec.get("featherY", 18)
-        feather_left, feather_top, feather_right, feather_bottom = spec.get(
-            "feather", [feather_x, feather_y, feather_x, feather_y])
-        if min(feather_left, feather_top, feather_right, feather_bottom) <= 0:
-            raise ValueError("feather widths must be positive")
-        for row in range(height):
-            for col in range(width):
-                distance = min(col / feather_left, (width - 1 - col) / feather_right,
-                               row / feather_top, (height - 1 - row) / feather_bottom)
-                alpha[row, col] = max(0, min(255, int(distance * 255)))
-        alpha_image = Image.fromarray(alpha)
-        for image in selected:
-            image.putalpha(ImageChops.multiply(image.getchannel("A"), alpha_image))
+        selected = [feather_patch(image, spec) for image in selected]
 
     columns = spec.get("columns", 8)
     per_sheet = spec.get("framesPerSheet", 64)

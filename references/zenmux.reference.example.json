@@ -68,7 +68,10 @@
         ],
         "verify": "交付时说明切换限制，由用户验收实际体验"
       }
-    }
+    },
+    "subjects": [
+      "primary-character"
+    ]
   },
   "extra": {
     "prompt_expansion_mode": "disabled"

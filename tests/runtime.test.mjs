@@ -5,48 +5,57 @@ import {mountHeadFollowers} from '../assets/head-follow.mjs';
 import {createHash} from 'node:crypto';
 import {mapDirection,angularDistance} from '../assets/pointer-direction.mjs';
 import {previewFrame,validPreview} from '../assets/candidate-preview.mjs';
+import {verifyQuality} from '../assets/quality-gate.mjs';
 
 function environment({fail=false,slow=false,unreviewed=false,changed=false}={}) {
   const names=['window','document','matchMedia','Image','IntersectionObserver','fetch','requestAnimationFrame','cancelAnimationFrame'];
   const saved=Object.fromEntries(names.map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]));
   const window=new EventTarget(),document=new EventTarget(),media=new EventTarget();
   media.matches=false;document.hidden=false;document.baseURI='http://example.test/';document.documentElement=new EventTarget();
-  const calls=[],canvases=[],jobs=new Map();let serial=0,release;
+  const calls=[],canvases=[],baseLayers=[],decoded=[],drawn=[],objectUrls=new Map(),jobs=new Map();let serial=0,release;
+  const oldCreate=URL.createObjectURL,oldRevoke=URL.revokeObjectURL;
+  URL.createObjectURL=blob=>{const url=`blob:fixture-${++serial}`;objectUrls.set(url,blob);return url;};
+  URL.revokeObjectURL=url=>objectUrls.delete(url);
   const waiting=slow?new Promise(resolve=>release=resolve):Promise.resolve();
   document.createElement=()=>{
-    const canvas={dataset:{},style:{},setAttribute(){},getContext(){return {clearRect(){calls.push('clear');},drawImage(){calls.push('draw');}};},
-      remove(){const index=canvases.indexOf(canvas);if(index>=0)canvases.splice(index,1);}};return canvas;
+    const canvas={dataset:{},style:{},setAttribute(){},getContext(){return {clearRect(){calls.push('clear');},drawImage(image){calls.push('draw');drawn.push(image);}};},
+      remove(){for(const list of [canvases,baseLayers]){const index=list.indexOf(canvas);if(index>=0)list.splice(index,1);}}};return canvas;
   };
   const manifest={sceneId:'test',baseImage:'base.png',sourceSize:[100,100],crop:[40,40,10,10],eye:[.45,.45],
     frameCount:8,columns:8,framesPerSheet:8,directionFrames:[0,1,2,3,4,5,6,7],sheets:['sheet.png'],background:{owner:'scene',mode:'preserve'}};
   const hash=value=>createHash('sha256').update(value).digest('hex');
   const pixelBytes=new TextEncoder().encode('fixture pixels');
-  const binding={contract:structuredClone(manifest),assets:[{scope:'root',path:'base.png',sha256:hash(pixelBytes)},
+  const baseBytes=new TextEncoder().encode('fixture base');
+  const binding={contract:structuredClone(manifest),assets:[{scope:'root',path:'base.png',sha256:hash(baseBytes)},
     {scope:'manifest',path:'sheet.png',sha256:hash(pixelBytes)}]};
   const reportBytes=new TextEncoder().encode(JSON.stringify({status:'reviewed',circular:true,issues:[],binding}));
   manifest.quality=unreviewed?{status:'candidate',circular:false}:
     {status:'reviewed',circular:true,binding,report:'quality.json',reportSha256:hash(reportBytes)};
   Object.assign(globalThis,{window,document,matchMedia:()=>media,
-    Image:class{constructor(){this.width=80;this.height=10;}async decode(){await waiting;}},
+    Image:class{constructor(){this.width=80;this.height=10;}async decode(){
+      await waiting;this.pixels=objectUrls.has(this.src)?await objectUrls.get(this.src).text():'unverified URL pixels';
+      if(this.pixels==='fixture base'){this.width=100;this.height=100;}decoded.push(this);
+    }},
     IntersectionObserver:class{constructor(callback){this.callback=callback;}observe(){this.callback([{isIntersecting:true}]);}disconnect(){}},
     fetch:async url=>({ok:!fail,json:async()=>manifest,
       arrayBuffer:async()=>String(url).endsWith('quality.json')?reportBytes.buffer:
-        (changed?new TextEncoder().encode('changed pixels').buffer:pixelBytes.buffer)}),
+        (changed?new TextEncoder().encode('changed pixels').buffer:String(url).endsWith('base.png')?baseBytes.buffer:pixelBytes.buffer)}),
     requestAnimationFrame:callback=>{jobs.set(++serial,callback);return serial;},cancelAnimationFrame:id=>jobs.delete(id)});
   const scene={append(canvas){canvases.push(canvas);}};
   const baseImage={src:'http://example.test/base.png',naturalWidth:100,naturalHeight:100,dataset:{sceneId:'test'},
-    decode:async()=>{},getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})};
-  return {scene,baseImage,calls,canvases,jobs,release,media,manifest,
+    after:layer=>baseLayers.push(layer),decode:async()=>{},getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})};
+  return {scene,baseImage,calls,canvases,baseLayers,decoded,drawn,objectUrls,jobs,release,media,manifest,
     makePreview(mode='phase',samples=[[0,0],[360,7]]) {
       delete manifest.directionFrames;
       manifest.quality={status:'candidate',circular:false};
       manifest.preview={mode,samples,notes:'Synthetic fixture only; not reviewed for directions.'};
-      manifest.baseImageSha256=hash(pixelBytes);manifest.sheetHashes={'sheet.png':hash(pixelBytes)};
+      manifest.baseImageSha256=hash(baseBytes);manifest.sheetHashes={'sheet.png':hash(pixelBytes)};
     },
     flush(){let time=1,guard=0;while(jobs.size){if(++guard>1000)throw new Error('animation did not settle');
       const batch=[...jobs.values()];jobs.clear();for(const callback of batch)callback(time);time+=16.67;}},
     pointer(x,y){const event=new Event('pointermove');Object.assign(event,{clientX:x,clientY:y,pointerType:'mouse'});window.dispatchEvent(event);},
-    restore(){for(const name of names){if(saved[name])Object.defineProperty(globalThis,name,saved[name]);else delete globalThis[name];}}};
+    restore(){URL.createObjectURL=oldCreate;URL.revokeObjectURL=oldRevoke;
+      for(const name of names){if(saved[name])Object.defineProperty(globalThis,name,saved[name]);else delete globalThis[name];}}};
 }
 test('pointer draws, neutral clears, teardown removes layers and pending callbacks',async()=>{
   const env=environment();let controller;
@@ -160,4 +169,59 @@ test('candidate mappings handle a top-crossing arc without claiming missing dire
   for(let degree=-720;degree<720;degree++) {
     const frame=previewFrame(degree*Math.PI/180,phase);assert(frame>=0&&frame<8);
   }
+});
+
+test('reviewed and candidate rendering use verified bytes for both base and patches',async()=>{
+  for(const preview of [false,true]) {
+    const env=environment();let controller;
+    if(preview)env.makePreview();
+    try {
+      controller=mountHeadFollowers({...env,experimentalPreview:preview,subjects:[{id:'person',manifest:'frames/manifest.json'}]});
+      assert.equal((await controller.ready).person,preview?'experimental-phase':'ready');
+      env.pointer(45,0);
+      assert.equal(env.baseLayers.length,1);
+      assert.deepEqual(env.drawn.map(image=>image.pixels),['fixture base','fixture pixels']);
+      assert(env.decoded.every(image=>image.src.startsWith('blob:')),'no second HTTP image load');
+      assert.equal(env.objectUrls.size,0);
+      controller.destroy();assert.equal(env.baseLayers.length,0);
+    } finally {controller?.destroy();env.restore();}
+  }
+});
+
+test('bfcache restores followers and explicit destruction stays final',async()=>{
+  const env=environment();let controller;
+  const event=name=>{const e=new Event(name);Object.assign(e,{persisted:true});window.dispatchEvent(e);};
+  try {
+    controller=mountHeadFollowers({...env,subjects:[{id:'person',manifest:'frames/manifest.json'}]});
+    await controller.ready;env.pointer(45,0);env.pointer(90,40);
+    event('pagehide');assert.equal(controller.getStatus().person,'suspended');
+    assert.equal(env.jobs.size,0);assert.equal(env.canvases.length,0);assert.equal(env.baseLayers.length,0);
+    event('pageshow');assert.equal((await controller.ready).person,'ready');
+    assert.equal(env.canvases.length,1);assert.equal(env.baseLayers.length,1);
+    env.pointer(45,0);assert.equal(env.calls.at(-1),'draw');
+    controller.destroy();event('pageshow');
+    assert.equal(controller.getStatus().person,'destroyed');assert.equal(env.canvases.length,0);
+  } finally {controller?.destroy();env.restore();}
+});
+
+test('lineage is a verified resource in the Python-compatible quality contract',async()=>{
+  const oldFetch=globalThis.fetch;
+  const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+  const bytes=new TextEncoder().encode('fixture resource');
+  const config={baseImage:'base.png',sheets:['sheet.png'],frameLineage:{path:'lineage.json'}};
+  const binding={contract:structuredClone(config),assets:[
+    {scope:'root',path:'base.png',sha256:hash(bytes)},
+    {scope:'manifest',path:'sheet.png',sha256:hash(bytes)},
+    {scope:'root',path:'lineage.json',sha256:hash(bytes)}]};
+  const report=new TextEncoder().encode(JSON.stringify({status:'reviewed',circular:true,issues:[],binding}));
+  config.quality={status:'reviewed',circular:true,binding,report:'quality.json',reportSha256:hash(report)};
+  try {
+    for(const changed of [false,true]) {
+      globalThis.fetch=async url=>({ok:true,arrayBuffer:async()=>String(url).endsWith('quality.json')?report.buffer:
+        changed&&String(url).endsWith('lineage.json')?new ArrayBuffer(1):bytes.buffer});
+      const check=verifyQuality(config,new URL('https://example.test/atlas/manifest.json'),new URL('https://example.test/'));
+      if(changed)await assert.rejects(check,/asset changed/);
+      else assert.equal((await check).size,3);
+    }
+  } finally {globalThis.fetch=oldFetch;}
 });

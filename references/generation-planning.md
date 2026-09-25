@@ -2,6 +2,8 @@
 
 先复用可用素材；只有需要生成时走本文。目的在于减少模型猜测，不是靠事后拦截提高表面通过率。
 
+先按 [feasibility.md](feasibility.md) 核对目标与可控能力。默认单主体试片；多主体首屏逐主体验证，不能仅为压缩提交次数而把多个完整方向动作塞进同一视频。上一片缺失什么、下一次改哪个实际控制来源要写清；缺口未改变时不重复同配置生成。
+
 ## 控制分工
 
 | 要求 | 优先控制 | 边界 |
@@ -25,7 +27,22 @@
 
 5秒/768p是低成本试片默认，不是所有动作的最佳值。时长按所选模型范围、动作与已有预算决定。参考视频、绿幕、近景、分段或更长时长都没有跨素材成功率保证。
 
+## 按动作负荷选择时长
+
+5秒是默认低成本预算，不是完整环的最佳时长，也不是模型能力上限。生成前分别分配进入、有效轨迹和退出时间，写入 durationReason。entry-orbit 的有效环时长约为 duration × (cycleEnd − entryEnd)；默认0.12→0.88在5秒里只有3.8秒，八个方向区间平均不足0.5秒，还未计入模型停顿。百分比仅为意图，成片仍需实测。
+
+- 单独上弧、局部过渡或可行性小样：5秒可作为起点。
+- 从中性进入并完成整圈：在模型支持且预算已授权时，优先评估8–10秒；这是动作余量的规划建议，尚未做同输入不同时长对照，不能声称成功率已提高。
+- 已有适合抬头的首图：可省去中性进入/返回，专注有效环。若去掉返回，应同步改 cycleEnd、endPose 和实际尾图；不能只删提示词却继续提交中性尾图。
+- 预算仅允许5秒时明确它是可行性小样；不承诺必然完成整圈。已有可用大部分动作时优先定点补缺，不因怀疑时长就重做整条。
+
+需要更长素材时同时核对请求 duration 和原预算 limits.maxSecondsPerSubmission、limits.maxTotalSeconds，保留 attempts，并在 limits.changeReason 记录已有授权。只改请求会被默认5秒上限拒绝；不得由时长建议自动扩大费用。已有授权可直接配置，无需重复询问。
+
+长视频仍可能增加停顿、身份漂移或走错路线。中性首尾只约束两端，不保证内部完整环。诊断缺口时同时检查动作时间、实际首尾、图文一致与轨迹覆盖，不把失败单独归因于5秒。
+
 ## 一份规格派生提示词与验收
+
+motionPlan.subjects 为仅含一个非空主体标识的数组，例如 `["person"]`，指本次需要运动的角色。人和狗分别请求与标定；默认近景提高头眼清晰度，允许静态其他角色或全场景作必要上下文。选择依据是清晰度、余量、动作范围和合成方式，不能把“画面只能有一个人”当成通用要求。代码不能自动识别角色或其动作，仍需检查真实输入。
 
 motionPlan.requirements 包含 identity、motion、range、gaze、fixedParts、loop、rest 七项，每项：
 ```json
@@ -34,7 +51,7 @@ motionPlan.requirements 包含 identity、motion、range、gaze、fixedParts、l
 
 controls 可用实际发送的 first_frame、last_frame、reference_image、reference_video、reference_audio，或 prompt、compositing、runtime、not-requested。未实际发送的媒体不能声称为控制来源。仅靠 prompt 的项会在 dry-run 提示，不增加审批。compositing/runtime 在 expected/verify 中写具体处理；rest 未实现时写静态回退，不写自然回正。
 
-motionPlan 不发给模型，Agent 据此编写 prompt 并沿用同一验收标准。脚本验证结构、引用和哈希，不自动证明文字语义完整或视觉正确。
+motionPlan 本体不发给模型。设置 promptSpec 时，生成入口把路线、首尾姿态、背景方式以及 controls 含 prompt 的 expected 自动组装为实际提交文本；verify 和仅由 compositing/runtime/not-requested 承担的要求留在本地检查记录。先用 build_motion_prompt.py 导出核对，详见 [prompt-patterns.md](prompt-patterns.md)。手写 prompt/prompt_file 仍支持，但需 Agent 自行保持语义一致；两种入口不能混用。脚本验证结构、引用、占位符和哈希，不自动证明语义无矛盾或视觉正确。
 
 ## 请求绑定的输入观察
 
@@ -42,6 +59,7 @@ motionPlan 不发给模型，Agent 据此编写 prompt 并沿用同一验收标�
 
 | 检查 | 内容 |
 |---|---|
+| subjectIsolation | 本次仅驱动一个目标；检查实际头眼清晰度、运动余量及静态上下文是否干扰。邻近角色可静止出现，记录保留原因，必须 pass |
 | identity | 各输入与原始基准一致，未继承失败帧变形 |
 | inputPose | 实际姿态与声明首尾/参考角色一致 |
 | motionRange | 幅度适合当前主体和用途，未拿极端姿态当通用端点 |
@@ -53,6 +71,8 @@ motionPlan 不发给模型，Agent 据此编写 prompt 并沿用同一验收标�
 | motionReference | 示范本身方向、幅度、眼神与镜头适用；无示范则 not-applicable |
 
 status 为 pass / limited / not-applicable / fail / unreviewed；已判断项须有具体 notes。limited 记录可接受输入局限，不代表生成质量；若核心要求已不可能则写 fail 并修输入。不要自动把全部模板填 pass，也不要让用户代填 Agent 能完成的观察。已有用户验收可引用。
+
+旧生成 spec 需补 subjects 并重新核对 subjectIsolation 后才能提交新任务；旧 job-id 查询不受此要求影响。眼神、表情、中性到方向的过渡按 [gaze-and-rest.md](gaze-and-rest.md) 分开记录；不能把保持原表情误写为全程直视镜头。
 
 改图、改请求或计划后保留旧表并创建新表；只重新核对变更影响，其它有效观察可注明来源后沿用。哈希不证明语义，观察表不是批准来源。原始身份基准也绑定字节，防止逐轮漂移被合理化。
 
